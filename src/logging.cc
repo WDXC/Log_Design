@@ -482,6 +482,364 @@ class LogDestination {
   public:
     friend class LogMessage;
     friend void ReprintFatalMessage();
+    friend base::Logger* base::GetLogger(LogSeverity);
+    friend void base::SetLogger(LogSeverity, base::Logger*);
+
+    // These methods are just forward to by their global versions.
+    static void SetLogDestination(LogSeverity severity,
+                                  const char* base_filename);
+    static void SetLogSymlink(LogSeverity severity,
+                              const char* symlink_basename);
+    static void AddLogSink(LogSink* destination);
+    static void RemoveLogSink(LogSink* destination);
+    static void SetLogfilenameExtension(LogSeverity severity,
+                                        const char* symlink_basename);
+    static void AddLogSink(LogSink* destination);
+    static void RemoveLogSink(LogSink* destination);
+    static void SetLogFilenameExtension(const char* filename_extension);
+    static void SetStderrLogging(LogSeverity min_severity);
+    static void SetEmailLogging(LogSeverity min_severity, const char* addresses);
+    static void LogToStderr();
+
+    // Flush all log files that are at least at the given severity level
+    static void FlushLogfiles(int min_severity);
+    static void FlushLogFilesUnsafe(int min_severity);
+
+    // we set the maximum size of our packet to be 1400, the logic being
+    // to prevent fragmentation.
+    // Really this number is arbitraty.
+    static const int kNetWorkBytes = 1400;
+
+    static const string& hostname();
+    static const bool& terminal_supports_color() {
+      return terminal_supports_color_;
+    }
+
+    static void DeleteLogDestinations();
+
+  private:
+    LogDestination(LogSeverity severity, const char* base_filename);
+    ~LogDestination();
+
+    // Take a log message of a particular severity and log it to stderr
+    // iff it's of a high enough severity to deserve it.
+    static void MaybeLogToStderr(LogSeverity severity, const char* message,
+                                 size_t message_len, size_t prefix_len);
+    
+    // Take a log message of a particular severity and log it to email
+    // iff it's of a high enough severity to deserve it
+    static void MaybeLogToEmail(LogSeverity severity, const char* message,
+                                size_t len);
+
+    // Take a log message of a particular severity and log it to email
+    // iff it's of a high enough severity to deserve it.
+    static void MaybeLogToLogfile(LogSeverity severity,
+                                  time_t timestamp,
+                                  const char* message, size_t len);
+
+    // Take a long message of a particular severity and log it to the file
+    // for that severity and also for all files with severity less than
+    // this severity.
+    static void LogToAllLogFiles(LogSeverity severity,
+                                 time_t timestamp,
+                                 const char* message, size_t len);
+
+    // send logging info to all registered sinks.
+    static void LogToSinks(LogSeverity severity, const char* full_filename,
+                           const char* base_filename, int line,
+                           const LogMessageTime& logmsgtime, const char* message,
+                           size_t message_len);
+    
+    // wait for all registered sinks via WaitTillSend
+    // including the optional one in "data"
+    static void WaitForSinks(LogMessage::LogMessageData* data);
+
+    static LogDestination* log_destination(LogSeverity severity);
+
+    base::Logger* GetLoggerImpl() const { return logger_; }
+    void SetLoggerImpl(base::Logger* logger);
+    void ResetLoggerImpl() { SetLoggerImpl(&fileobject_); }
+
+    LogFileObject fileobject_;
+    base::Logger* logger_;
+
+    static LogDestination* log_destinations_[NUM_SEVERITIES];
+    static LogSeverity email_logging_severity_;
+    static string addresses_;
+    static string hostname_;
+    static bool terminal_supports_color_;
+
+    // arbitrary global logging destinations.
+    static vector<LogSink*>* sinks_;
+
+    // Protects the vector sinks_;
+    // but not the LogSink objects its elements reference
+    static Mutex sink_mutex_;
+
+    // Disallow
+    LogDestination(const LogDestination&) = delete;
+    LogDestination& operator=(const LogDestination&) = delete;
+};
+
+
+// Errors do not get logged to email by defualt
+LogSeverity LogDestination::email_logging_severity_ = 99999;
+
+string LogDestination::addresses_;
+string LogDestination::hostname_;
+
+vector<LogSink*>* LogDestination::sinks_ = nullptr;
+Mutex LogDestination::sink_mutex_;
+bool LogDestination::termianl_supports_color_ = TerminalSupportsColor();
+
+const string& LogDestination::hostname() {
+  if (hostname_empty()) {
+    GetHostName(&hostname_);
+    if (hostname_.empty()) {
+      hostname_ = "(unknown)";
+    }
+  }
+
+  return hostname_;
 }
 
+LogDestination::LogDestination(LogSeverity severity,
+                               const char* base_filename)
+  : fileobject_(severity, base_filename),
+  logger_(&fileobject_) {
+
+} 
+
+LogDestination::~LogDestination () {
+  ResetLoggerImpl();
+}
+
+void LogDestination::SetLoggerImpl (base::Logger* logger) {
+  if (logger_ == logger)  {
+    return;
+  }
+
+  if (logger_ && logger_ != &fileobject_) {
+    delete logger_;
+  }
+
+  logger_ = logger;
+}
+
+inline void LogDestination::FlushLogFilesUnsafe(int min_severity) {
+  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
+    LogDestination* log = log_destination_[i];
+
+    if (log != nullptr) {
+      log->fileobject_.FlushUnlocked();
+    }
+  }
+}
+
+
+inline void LogDestination::FlushLogfiles(int min_severity) {
+  MutexLock l(&log_mutex);
+  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
+    LogDestination* log = log_destinations(i);
+    if (log != nullptr) {
+      log->logger_->Flush();
+    }
+  }
+}
+
+
+inline void LogDestination::SetLogDestination(LogSeverity severity,
+    const char* base_filename) {
+  assert(severity >= 0 && severity < NUM_SEVERITIES);
+
+  MutexLock l (&log_mutex);
+  log_destination(severity)->fileobject_.SetBasename(base_filename);
+}
+
+inline void LogDestination::SetLogSymlink(LogSeverity severity,
+    const char* symlink_basename) {
+  CHECK_GE(severity, 0);
+  CHECK_LT(severity, NUM_SEVERITIES);
+  MutexLock l(&log_mutex);
+  log_destination(severity)->fileobject_.SetSymlinkBasename(symlink_basename);
+}
+
+inline void LogDestination::AddLogSink(LogSink* destination) {
+  MutexLock l(&sink_mutex_);
+  if (!sinks_) sinks_ = new vector<LogSink*>;
+  sinks_->push_back(destination);
+}
+
+inline void LogDestination::RemoveLogSink(LogSink* destination) {
+  MutexLock l(&sink_mutex_);
+
+  if (sinks_) {
+    sinks_->erase(std::remove(sinks_->begin(), sinks_->end(), destination), sinks_->end());
+  }
+}
+
+inline void LogDestination::SetLogFilenameExtension(const char* ext) {
+  Mutex l(&log_mutex);
+
+  for (int severity = 0; severity < NUM_SEVERITIES; ++severity) {
+    log_destination(severity)->fileobject_.SetExtension(ext);
+  }
+}
+
+inline void LogDestination::SetStderrLogging(LogSeverity min_severity) {
+  assert(min_severity >= 0 && min_severity < NUM_SEVERITIES);
+
+  MutexLock l (&log_mutex);
+  FLAGS_stderrthreadhold = min_severity;
+}
+
+inline void LogDestination::LogToStderr() {
+  SetStderrLogging(0);
+
+  for (int i = 0; i < NUM_SEVERITIES; ++i) {
+    SetLogDestination(i, "");
+  }
+
+}
+
+inline void LogDestination::SetEmailLogging(LogSeverity min_severity,
+    const char* addresses) {
+  assert(min_severity >= 0 && min_severity < NUM_SEVERITIES);
+
+  // Prevent any subtle race conditions by wrapping a mutex lock around
+  // all this stuff
+  MutexLock l (&log_mutex);
+  LogDestination::email_logging_severity_ = min_severity;
+  LogDestination::addresses_ = addresses;
+}
+
+static void ColoredWriteToStderrOrStdout(FILE* output, LogSeverity severity,
+    const char* message, size_t len) {
+  bool is_stdOut = (output == stdout);
+  const GLogColor color = (LogDestination::terminal_supports_color() &&
+                           ((!is_stdout && FLAGS_colorlogstderr) ||
+                            (is_stdout && FLAGS_colorlogtostdout)))
+                              ? SeverityToColor(severity)
+                              : COLOR_DEFAULT;
+
+  // Avoid using cerr from this module since we may get called during
+  // exit code, and cerr may be partially or fully destroyed by then.
+  if (COLOR_DEFAULT == color) {
+    fwrite(message, len, 1, output);
+    return ;
+  }
+#ifdef GLOG_OS_WINDOWS
+  const HANDLE output_handle = 
+    GetStdHandle(is_stdout ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+
+  CONSOLE_SCREEN_BUFFER_INFO buffer_info;
+  GetConsoleScreenBufferInfo(output_handle, &buffer_info);
+  const WORD old_color_attrs = buffer_info.wAttributes;
+
+  // we need to flush the stream buffers into the console before each
+  // SetconsoleTextAttribute call lest it affect the text that is already
+  // printed but has not yet reached the console.
+  fflush(output);
+  SetConsoleTextAttribute(output_handle,
+                          GetColorAttribute(color) | FOREGROUND_INTENSITY);
+  fwrite(message, len, 1, output);
+  fflush(output);
+  // Restores the text color;
+  SetConsoleTextAttribute(output_handle, old_color_attrs);
+
+#else
+  fprintf(output, "\033[0;3%sm", GetAnsiColorCode(color));
+  fwrite(message, len, 1, output);
+  fprintf(output, "\033[m");
+#endif
+}
+
+static void ColoredWriteToStdout(LogSeverity severity, const char* message,
+    size_t len) {
+  FILE* output = stdout;
+  // we also need to send logs to the stderr when the severity is 
+  // higher or equal to the stderr threshold
+  if (severity >= FLAGS_stderrthreadhold) {
+    output = stderr;
+  }
+
+  ColoredWriteToStderrOrStdout(output, severity, message, len);
+}
+
+static void ColoredWriteToStderr(LogSeverity severity, const char* message,
+    size_t len) {
+  ColoredWriteToStderrOrStdout(stderr, severity, message, len);
+}
+
+static void WriteToStderr(const char* message, size_t len) {
+  fwrite(message, len, 1, stderr);
+}
+
+inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
+    const char* message, size_t message_len, size_t prefix_len) {
+  if ((severity >= FLAGS_stderrthreshold) || FLAGS_alsologtostderr) {
+    ColoredWriteToStderr(severity, message, message_len);
+#ifdef GLOG_OS_WINDOWS
+    (void) prefix_len;
+    ::OutputDebugStringA(message);
+#endif defined(__ANDROID__)
+    const int android_log_levels[NUM_SEVERITIES] = {
+      ANDROID_LOG_INFO,
+      ANDROID_LOG_WARN,
+      ANDROID_LOG_ERROR,
+      ANDROID_LOG_FATAL,
+    };
+    __android_log_write(android_log_levels[severity],
+                        glog_internal_namespace_::ProgramInvocationShortName(),
+                        message + prefix_len);
+#else
+    (void) prefix_len;
+#endif
+  }
+}
+
+inline void LogDestination::MaybeLogToEmail(LogSeverity seveity,
+    const char* message, size_t len) {
+  if (severity >= email_logging_severity_ ||
+      severity >= FLAGS_logemaillevel) {
+    string to(FLAGS_alsologtoemail);
+    if (!addresses_.empty()) {
+      if (!to.empty()) {
+        to += ",";
+      }
+      to += addresses_;
+    }
+    const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " + 
+        glog_internal_namespace_::ProgramInvocationShortName());
+
+    string body(hostname());
+    body += "\n\n";
+    body.append(message, len);
+
+    SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
+  }
+}
+
+inline void LogDestination::MaybeLogToLogfile(LogSeverity severity, time_t timestamp,
+    const char* message,
+    size_t len) {
+  const bool should_flush = severity > FLAGS_logbuflevel;
+  LogDestination* destination = log_destination(severity);
+  destination->logger_->Write(should_flush, timestamp, message, len);
+}
+
+inline void LogDestination::LogToAllLogFiles (LogSeverity severity,
+    time_t timestamp,
+    const char* message,
+    size_t len) {
+  if (FLAGS_logtostdout) {
+    ColoredWriteToStdout(severity, message, len);
+  } else if (FLAGS_logtostderr) {
+    ColoredWriteToStderr(severity, message, len);
+  } else {
+    for (int i = severity; i >= 0; --i) {
+      LogDestination::MaybeLogToLogfile(i, timestamp, message, len);
+    }
+  }
+}
 
