@@ -843,3 +843,116 @@ inline void LogDestination::LogToAllLogFiles (LogSeverity severity,
   }
 }
 
+inline void LogDestination::LogToAllLogfiles(LogSeveity severity,
+    time_t timestamp,
+    const char* message,
+    size_t len) {
+  if (FLAGS_logtostdout) {
+    ColoredWriteToStdout(severity, message, len);
+  } else if (FLAGS_logtostderr) {
+    ColoredWriteToStderr(severity, message, len);
+  } else {
+    for (int i = severity; i >= 0; --i) {
+      LogDestination::MaybeLogToLogfile(i, timestamp, message, len);
+    }
+  }
+}
+
+inline void LogDestination::LogToSinks(LogSeverity severity,
+    const char* full_filename,
+    const char* base_filename, int line,
+    const LogMessage& logmsgtime,
+    const char* message,
+    size_t message_len) {
+  ReaderMutexLock l(&sink_mutex_);
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0; ) {
+      (*sinks_)[i]->send(severity, full_filename, base_filename,
+          line, logmsgtime, message, message_len);
+    }
+  }
+}
+
+inline void LogDestination::WaitForSinks(LogMessage::LogMessageData* data) {
+  ReaderMutexLock l(&sink_mutex_);
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0; ) {
+      (*sinks_)[i]->WaitTillSent();
+    }
+  }
+
+  const bool send_to_sink = 
+    (data->send_method_ == &LogMessage::SendToSink) ||
+    (data->send_method_ == &LogMessage::SendToSinkAndLog);
+  if (send_to_sink && data->sink_ != nullptr) {
+    data->sink_ ->WaitTillSent();
+  }
+}
+
+inline LogDestination* LogDestination::log_destination(Logseverity severity) {
+  assert(severity >= 0 && severity < NUM_SEVERITIES);
+  if (!log_destinations_[severity]) {
+    log_destinations_[severity] = new LogDestination(severity, nullptr);
+  }
+  return log_destinations_[severity];
+}
+
+void LogDestination::DeleteLogDestinations() {
+  for (auto& log_destination : log_destinations_) {
+    delete log_destination;
+    log_destination = nullptr;
+  }
+  MutexLock l (&sink_mutex_);
+  delete sinks_;
+  sinks_ = nullptr;
+}
+
+namespace {
+  std::string g_application_fingerprint;
+}
+
+void SetApplicationFingerprint(const std::string& fingerprint) {
+  g_application_fingerprint = fingerprint;
+}
+
+namespace {
+#ifdef GLOG_OS_WINDOWS
+const char possible_dir_delim[] = {'\\', '/'};
+#else
+const char possible_dir_delim[] = {'/'};
+#endif
+
+string PrettyDuration(int secs) {
+  std::stringstream result;
+  int mins = secs / 60;
+  int hours = mins/60;
+  mins = mins % 60;
+  secs = secs % 60;
+  result.fill('0');
+  result << hours << ':' << setw(2) << mins << ':' << setw(2) << secs;
+  return result.str();
+}
+
+LogFileObject::LogFileObject(LogSeverity severity, const char* base_filename)
+  : base_filename_selected_(base_filename != nullptr),
+    base_filename_((base_filename != nullptr) ? base_filename : ""),
+    symlink_basename_(glog_internal_namespace_::ProgramInvocationShortName()),
+    filename_extension_(),
+    severity_(severity),
+    rollover_attemp_(kRolloverAttemptFrequency -1),
+    start_time_(WallTime_Now()) {
+      assert(severity >= 0);
+      assert(severity < NUM_SEVERITIES);
+    }
+
+LogFileObject::~LogFileObject() {
+  MutexLock l(&lock_);
+  if (file_ != nullptr) {
+    fclose(file_);
+    file_ = nullptr;
+  }
+}
+
+
+
+}
