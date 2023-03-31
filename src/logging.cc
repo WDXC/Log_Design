@@ -1078,8 +1078,9 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
     if (slash) linkpath = string(filename, static_cast<size_t>(slash-filename+1)); // get dirname
     linkpath += linkname;
     unlink(linkpath.c_str());
+#if defined(GLOG_OS_WINDOWS)
+    // TODO(hamaji): Create lnk file onWindows
   }
-
 }
 
 
