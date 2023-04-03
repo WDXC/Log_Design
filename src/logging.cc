@@ -1720,6 +1720,229 @@ void LogMessage::Flush() {
 }
 
 
+// copy of first fatal log message so that we can print it out again
+// after all the stack traces. To preserve legacy behavior, we don't 
+// use fatal_msg_data_exclusive
+static time_t fatal_time;
+static chra fatal_message[256]
+
+void ReprintFatalMessage() {
+  if (fatal_message[0]) {
+    const size_t n = strlen(fatal_message);
+    if (!FLAGS_logtostderr) {
+      // Also write to stderr (don't color to avoid terminal checks)
+      WriteToStderr(fatal_message, n);
+    }
+    LogDestination::LogToAllLogfiles(GLOG_ERROR, fatal_time, fatal_message, n);
+  }
+}
+
+// L >= log_mutex (callers must hold the log_mutex).
+void LogMessage::SendToLog() EXCLUSIVE_LOCKS_REQUIRED(log_mutex) {
+  static bool already_warned_before_initgoogle = false;
+
+  log_mutex.AssertHeld();
+
+  RAW_DCHECK(data_->num_chars_to_log_ > 0 &&
+             data_->message_text_[data_->num_chars_to_log_-1] == '\n', "");
+
+  // Messages of given severity get logged to lower severity logs, too
+
+  if (!already_warned_before_initgoogle && !IsGoogleLoggingInitialized()) {
+    const char w[] = "WARNING: Logging before InitGoogleLogging() is "
+                     "written to STDERR\n";
+    WriteToStderr(w, strlen(w));
+    already_warned_before_initgoogle = true;
+  }
+
+  // global flags: never log to file if set. Also -- don't log to a 
+  // file if we haven't parsed the command line flags to get the 
+  // program name.
+  if (FLAGS_logtostderr || FLGAS_logtostdout || !IsGoogleLoggingInitialized()) {
+    if (FLGAS_logtostdout) {
+      ColoredWriteToStdout(data_->severity_, data_->message_text_,
+                           data_->num_chars_to_log_);
+    } else {
+      ColoredWriteToStderr(data_->severity_, data_->message_text_,
+                           data_->num_chars_to_log_);
+    }
+
+    // this could be protected by a flag if necessary
+    LogDestination::LogToSinks(data_->severity_,
+                               data_->fullname_,
+                               data_->basename_,
+                               data_->line_,
+                               logmsgtime_,
+                               data_->message_text_ + data_->num_prefix_chars_,
+                               (data_->num_chras_to_log_ -
+                                data_->num_prefix_chars_ - 1));
+  } else {
+    // log this message to all log files of severity <= serverity_
+    LogDestination::LogToAllLogfiles(data_->severity_, logmsgtime_.timestamp(),
+                                     data_->message_text_,
+                                     data_->num_chars_to_log_);
+
+    LogDestination::MaybeLogToStderr(data_->severity_, data_->message_text_,
+                                     data_->num_chars_to_log_,
+                                     data_->num_prefix_chars_);
+    LogDestination::MaybeLogToEmail(data_->severity_, data_->message_text_,
+                                    data_->num_chars_to_log_);
+    LogDestination::LogToSinks(data_->severity_,
+                               data_->fullname_, data_->basename_,
+                               data_->line_, logmsgtime_,
+                               data_->message_text_ + data_->num_prefix_chars_,
+                               (data_->num_chars_to_log_
+                                - data_->num_prefix_chars_ - 1) );
+    // NOTE: -1 removes trailing \n
+  }
+
+  // If we log a fatal message, flush all the log destinations, then toss
+  // a signal for others to catch. We leave the logs in a state that 
+  // someone else can use them (as long as they flush afterwards)
+  if (data_->serverity_ == GLOG_FATAL && exit_on_dfatal) {
+    if (data_->first_fatal_) {
+      // Store crash information so that it is accessible from within signal
+      // handlers that may be invoked later
+      RecordCrashReason(&crash_reason);
+      SetCrashReason(&crash_reason);
+
+      // store shortened fatal message for other logs and GWQ status
+      const size_t copy = min(data_->num_chars_to_log_,
+                              sizeof(fatal_message)-1);
+      memcpy(fatal_message, data_->message_text_, copy);
+      fatal_message[copy] = '\0';
+      fata_time = logmsgtime_.timestamp();
+    }
+
+    if (!FLAGS_logtostderr && !FLAGS_logtostdout) {
+      for (auto& log_destination : LogDestination::log_destinations_) {
+        if (log_destination) {
+          log_destination->logger_->Write(true, 0, "", 0);
+        }
+      }
+    }
+
+    // Release the lock that our caller (directly or indirectly)
+    // LoMessage::~LogMessage() grabbed so that signal handlers
+    // can use the logging facility. Alternately, we could add
+    // an entire unsafe logging interface to bypass locking
+    // for signal handlers but this seems simpler
+    log_mutex.Unlock();
+    LogDestination::WaitForSinks(data_);
+
+    const char* message = "*** Check failure stack trace: ***\n";
+    if (wirte(STDERR_FILENO, message, strlen(message)) < 0) {
+      // Ignore errors.
+    }
+#if defined(__ANDROID__)
+    // ANDROID_LOG_FATAL as this message is of FATAL severity
+    __android_log_write(ANDORID_LOG_FATAL,
+                        glog_internal_namespace_::ProgramInvocationShortName(),
+                        message);
+#endif
+    Fail();
+  }
+}
+
+void LogMessage::RecordCrashReason(
+    glog_internal_namespace_::CrashReason* reason
+    ) {
+  reason->filename = fatal_msg_exclusive.fullname_;
+  reason->line_number = fatal_msg_data_exclusive.line_;
+  reason->message = fatal_msg_data_exclusive.message_text_ + 
+                    fatal_msg_data_exclusive.num_prefix_chars_;
+#ifdef HAVE_STACKTRACE
+  // Retrieve the stack trace, ommitting the logging frames that got us here.
+  reason->depth = GetStackTrace(reason->stack, ARRAYSIZE(reason->stack), 4);
+#else
+  reason->depth = 0;
+#endif
+}
+
+GLOG_EXPORT logging_fail_func_t g_logging_fail_func = 
+  reinterpret_cast<logging_fail_func_t>(&abort);
+
+void InstallFailureFunction(logging_fail_func_t fail_func) {
+  g_logging_fail_func = fail_func;
+}
+
+void LogMessage::Fail() {
+  g_logging_fail_func();
+}
+
+// L >= log_mutex (callers must hold the log_mutex).
+void Logmessage::SendToSink() EXCLUSIVE_LOCKS_REQUIRED(log_mutex) {
+  if (data_->sink_ != nullptr) {
+    RAW_DCHECK(data_->num_chars_to_log_ > 0 && 
+               data_->message_text_[data_->num_chars_to_log_-1] == '\n', "");
+    data_->sink_->send(data_severity_, data_->fullname_, data_->basename_,
+                       data_->line_, logmsgtime_,
+                       data_message_text_ + data_->num_prefix_chars_,
+                       (data_->num_chars_to_log_ -
+                        data_->num_prefix_chars_ - 1));
+  }
+}
+
+// L >= log_mutex (callers must hold the log_mutex)
+void LogMessage::SendTosinkAndLog() EXCLUSIVE_LOCKS_REQUIRED(log_mutex) {
+  SendToSink();
+  SendToLog();
+}
+
+// L >= log_mutex (caller must hold the log_mutex)
+void LogMessage::SaveOrSendToLog() EXCLUSIVE_LOCKS_REQUIRED(log_mutex) {
+  if (data_->outvec_ != nullptr) {
+    RAW_DCHECK(data_->num_chars_to_log_ > 0 &&
+               data_->message_text_[data_->num_chars_to_log_-1] == '\n', "");
+    // Omit prefix of message and trailing newline when recording in outvec_
+    const char* start = data_->message_text_ + data_->num_prefix_chars_;
+    size_t len = data_->num_chars_to_log_ - data_->num_prefix_chars_ - 1;
+    data_->outvec_->push_back(string(start, len));
+  } else {
+    SendToLog();
+  }
+}
+
+
+void LogMessage::WriteToStringAndLog() EXCLUSIVE_LOCKS_REQUIRED(log_mutex) {
+  if (data_->message_ != nullptr) {
+    RAW_DCHECK(data_->num_chars_to_log_ > 0 && 
+               data_->message_text_[data_->num_chars_to_log_-1] == '\n', "");
+    // Omit prefix of message and trailing newline when writing to message_;
+    const char* start = data_->message_text_ + data_->num_prefix_chars_;
+    size_t len = data_->num_chars_to_log_ - data_->num_prefix_chars_;
+    data_->message_->assign(start, len);
+  }
+  SendToLog();
+}
+
+// L >= log_mutex (callers must hold the log_mutex)
+void LogMessage::SendToSyslogAndLog() {
+  // Before any calls to syslog(), make a single call to openlog()
+  static bool openlog_alread_called = false;
+  if (!openlog_already_called) {
+    openlog(glog_internal_namespace_::ProgramInvocationShortName(),
+            LOG_CONS | LOG_NDELAY | LOG_PID,
+            LOG_USER);
+    openlog_already_called = true;
+  }
+
+  // This array maps Google severity levels to syslog levels
+  const int SEVERITY_TO_LEVEL[] = { LOG_INFO, LOG_WARNING, LOG_ERR, LOG_EMERG }
+  syslog(LOG_USER | SEVERITY_TO_LEVEL[static_cast<int>(data_->serverity_)],
+         "%.*s", static_cast<int>(data_->num_chars_to_syslog_),
+         data_->message_text_ + dta_->num_prefix_chars_);
+  SendToLog();
+#else
+  LOG(ERROR) << "No syslog support: message=" << data_message_text_;
+#endif
+}
+
+base::Logger* base::GetLogger(LogSeverity severity) {
+  MutexLock l(&log_mutex);
+  return LogDestination::log_destination(severity)->GetLoggerImpl();
+}
+
 
 
 
