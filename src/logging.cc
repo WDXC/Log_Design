@@ -1942,7 +1942,9 @@ base::Logger* base::GetLogger(LogSeverity severity) {
   MutexLock l(&log_mutex);
   return LogDestination::log_destination(severity)->GetLoggerImpl();
 }
+void base::SetLogger(LogSeverity severity, base::Logger* logger) {
+  MutexLock l(&log_mutex);
+  LogDestination::log_destination(severity)->SetLoggerImpl(logger);
+}
 
-
-
-
+// L < log_mutex, Acquires and release mutex_;
