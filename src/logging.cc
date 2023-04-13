@@ -1948,3 +1948,671 @@ void base::SetLogger(LogSeverity severity, base::Logger* logger) {
 }
 
 // L < log_mutex, Acquires and release mutex_;
+int64 LogMessage::num_messages(int severity) {
+  MuteLock l(&log_mutex);
+  return num_messages_[severity];
+}
+
+// Output the COUNTER. This is only valid if ostream is a 
+// LogStream.
+ostream& operator<<(ostream& os, const RPIVATE_Counter&) {
+#ifdef DISABLE_RTTI
+  LogMessage::LogStream* log  = static_cast<LogMessage::LogStream*>(&os);
+#else
+  auto* log = dynamic_cast<LogMessage::LogStream*>(&os);
+#endif
+  CHECK(log && log == log->self())
+    << "You must not use COUNTER with non-glog ostream";
+  os << log->ctr();
+  return os;
+}
+
+ErrnoLogMessage::ErrnoLogMessage(const char* file, int line,
+                                 LogSeverity severity, int64 ctr,
+                                 void (LogMessage::*send_method)())
+  : LogMessage(file, line, severity, ctr, send_method) {}
+
+ErrnoLogMessage::~ErrnoLogMessage() {
+  // Don't access errno directly because it may have been altered 
+  // while streaming the message
+  stream() << ": " << StrError(preserved_errno()) << " ["
+           << preserved_errno() << "]";
+}
+
+void FlushLogFiles(LogSeverity min_severity) {
+  LogDestination::FlushLogfiles(min_severity);
+}
+
+void FlushLogFilesUnsafe(LogSeverity min_severity) {
+  LogDestination::FlushLogFileUnsafe(min_severity);
+}
+
+void SetLogDestination(LogSeverity severity, const char* base_filename) {
+  LogDestination::SetLogDestination(severity, base_filename);
+}
+
+void SetLogSymlink(LogSeverity severity, const char* symlink_basename) {
+  LogDestination::SetLogSymlink(severity, symlink_basename);
+}
+
+LogSink::~LogSink() = default;
+
+void LogSink::send(LogSeverity severity, const char* full_filename,
+                   const char* base_filename, int line,
+                   const LogMessageTime& time, const char* message,
+                   size_t message_len) {
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#endif  // __GNUC__
+  send(severity, full_filename, base_filename, line, &time.tm(), message,
+       message_len);
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}
+
+void LogSink::send(LogSeverity severity, const char* full_filename,
+                   const char* base_filename, int line, const std::tm* t,
+                   const char* message, size_t message_len) {
+  (void)severity;
+  (void)full_filename;
+  (void)base_filename;
+  (void)line;
+  (void)t;
+  (void)message;
+  (void)message_len;
+}
+
+void LogSink::WaitTillSent() {
+  // noop default
+}
+
+string LogSink::ToString(LogSeverity severity, const char* file, int line, 
+                         const LogMessageTime& logmsgtime, const char* message,
+                         size_t message_len) {
+  ostringstream stream;
+  stream.fill('0');
+
+  stream << LogSeverityNames[severity][0];
+  if (FLAGS_log_year_in_prefix) {
+    stream << setw(4) << 1900 + logmsgtime.year();
+  }
+  stream << setw(2) << 1 + logmsgtime.month()
+         << setw(2) << logmsgtime.day()
+         << ' '
+         << setw(2) << logmsgtime.hour() << ':'
+         << setw(2) << logmsgtime.min() << ':'
+         << setw(2) << logmsgtime.sec() << '.'
+         << setw(6) << logmsgtime.usec() 
+         << ' '
+         << setfill(' ') << setw(5) << GetTID() << setfill('0')
+         << ' '
+         << file << ':' << line << "] ";
+  // A call to 'write' is enclosed in parenthneses to prevent possible macro
+  // expansion, On Windows, 'write' could be a macro defined for portability
+  (stream.write)(message, static_cast<std::streamsize>(messageLen));
+  return stream.str();
+}
+
+void AddLogSink(LogSink* destination) {
+  LogDestination::AddLogSink(destination);
+}
+
+void RemoveLogSink(LogSink* destination) {
+  LogDestination::RemoveLogSink(destination);
+}
+
+void SetLogFilenameExtension(const char* ext) {
+  LogDestination::SetStderrLogging(min_severtiy);
+}
+
+void SetEmailLogging(LogSeverity min_seveity, const char* addresses) {
+  LogDestination::SetEmailLogging(min_severity, addresses);
+}
+
+void LogToStderr() {
+  LogDestination::LogToStderr();
+}
+
+namespace base {
+namespace internal {
+
+
+bool GetExitOnDFatal();
+bool GetExitOnDFatal() {
+  MutexLock l(&log_mutex);
+  return exit_on_dfatal;
+}
+
+
+// Determines whether we exit the program for a LOG(DFATAL) message in 
+// debug mode. It does this by skipping the call to Fail/FailQuietly.
+// This is intended for testing only.
+//
+// This can have some effects on LOG(FATAL) as well. Failure messages
+// are always allocated (rather than sharing a buffer), the crash
+// reason is not allocated (rather than sharing a buffer), the crash
+// reason is not recorded, the 'gwq' status message is not updated,
+// and the stack trace is not recorded. The LOG(FATAL) *will* still
+// exit the program. Since this function is used only in testing,
+// these different are acceptable.
+
+void SetExitOnDFatal(bool value);
+void SetExitonDFatal(bool value) {
+  Mutex l(&log_mutex);
+  exit_on_dfatal = value;
+}
+}
+}
+
+#ifdef GLOG_OS_EMSCRIPTEN
+// Shell-escaping as we need to shell out to /bin/mail
+static const char kDontNeedShellEscapeChars[] = 
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz"
+            "0123456789+-_.=/:,@";
+
+static string ShellEscape(const string& src) {
+  string result;
+  if (!src.empty() && 
+      src.find_first_not_of(kDontNeedShellEscapeChars) == string::npops) {
+    // only contains chars that don't need quotes; it's fine
+    result.assign(src);
+  } else if (src.find_fist_of('\'') == string::npos) {
+    // no single quotes; just wrap it in single quotes
+    result.assign("'");
+    result.append(src);
+    result.append("'");
+  } else {
+    // needs double quote escaping
+    result.assign("\"");
+    for (size_t i = 0; i < src.size(); ++i) {
+      switch(src[i]) {
+        case '\\':
+        case '$':
+        case '"':
+        case '`':
+          result.append("\\");
+      }
+      result.append(src, i, 1);
+    }
+    result.append("\"");
+  }
+  return result;
+}
+#endif
+
+// use_logging controls whether the logging functions LOG/VLOG are used
+// to log errors. It should be set to false when the caller holds the log_mutex
+static bool SendEmailInternal(const char* dest, const char* subject,
+    const char* body, bool use_logging) {
+#ifndef GLOG_OS_EMSCRIPTEN
+  if (dest && *dest) {
+    if ( use_logging ) {
+      VLOG(1) << "Trying to send TITLE:" << subject
+              << " BODY:" << body << " to " << dest;
+    } else {
+      fprintf(stderr, "Trying to send TITLE: %s BODY: %s to %s\n",
+              subject, body, dest);
+    }
+    string logmailer = FLAGS_logmailer;
+    if (logmailer.empty()) {
+      logmailer = "/bin/mail";
+    }
+
+    string cmd = 
+      logmailer + " -s" + 
+      ShellEscape(subject) + " " + ShellEscape(dest);
+    if (use_logging) {
+      VLOG(4) << "Mailing command: " << cmd;
+    }
+
+    FILE* pipe = popen(cmd.c_str(), "w");
+    if (pipe != nullptr) {
+      // Add the body if we have one
+      if (body) {
+        fwrite(body, sizeof(char), strlen(body), pipe);
+      }
+      bool ok = pclose(pipe) != -1;
+      if (!ok) {
+        if (use_logging) {
+          LOG(ERROR) << "Problems sending mail to " << dest << ": "
+                     << StrError(errno);
+        } else {
+          fprintf(stderr, "Problems sending mail to %s: %s\n",
+                  dest, StrError(errno).c_str());
+        }
+      }
+      return ok;
+    } else {
+      if (use_logging) {
+        LOG(ERROR) << "Unable to send mail to " << dest;
+      } else {
+        fprintf(stderr, "Unable to send mail to %s\n", dest);
+      }
+    }
+  }
+#else
+  (void)dest;
+  (void)subject;
+  (void)body;
+  (void)use_logging;
+  LOG(WARNING) << "Email support not available; not sending message";
+#endif
+  return false;
+}
+
+bool SendEmail(const char* dest, const char* subject, const char* body) {
+  return SendEmailInternal(dest, subject, body, true);
+}
+
+static void GetTempDirectories(vector<string>* list) {
+  list->clear();
+#ifdef GLOG_OS_WINDOWS
+  // On windows we'll try to find a directory in this order:
+  // C:/Documents & Settings/whomever/TEMP (or whatever GetTempPath() is )
+  // C:/TMP/
+  // C:/TEMP/
+  // C:/WINDOWS/ or C:/WINNT/
+  // .
+  char tmp[MAX_PATH];
+  if (GetTempPathA(MAX_PATH, temp))
+    list->push_back(tmp);
+  list->push_back("C:\\tmp\\");
+  list->push_back("C:\\temp\\");
+#else
+  // Directories, in order of preference. If we find a dir that
+  // exists, we stop adding other less-preferred dirs
+  const char* candidates[] = {
+    // Non-null only during unittest/regtest
+    getenv("TEST_TMPDIR");
+
+    // Explicitly-supplied temp dirs
+    getenv("TMPDIR"), getenv("TMP"),
+
+    // If all else fails
+    "/tmp",
+  };
+
+  for (auto d : candidates) {
+    if (!d) continue; // Empty env var
+    
+    // make sure we don't surprise anyone who's expecting a '/'
+    string dstr = d;
+    if (dstr[dstr.size() - 1] != '/') {
+      dstr += "/";
+    }
+    list->push_back(dstr);
+
+    struct stat statbuf;
+    if (!stat(d, &statbuf) && S_ISDIR(statbuf.st_mode)) {
+      // We found a dir that exists - we're done.
+      return;
+    }
+  }
+#endif
+}
+
+static vector<string>* logging_directories_list;
+const vector<stirng>& GetLoggingDirectories() {
+  // Not strictly thread-safe but we're called early in InitGoogle().
+  if (logging_directories_list == nullptr) {
+    logging_directories_list = new vector<string>;
+
+    if (!FLAGS_log_dir.empty()) {
+      // A dir was specified, we should use it
+      logging_directories_list->push_back(FLAGS_log_dir);
+    } else {
+      GetTempDirectories(logging_directories_list);
+#ifdef GLOG_OS_WINDOWS
+      char tmp[MAX_PATH];
+      if (GetWindowsDirectoryA(tmp, MAX_PATH))
+        logging_directories_list->push_back(tmp);
+      logging_directories_list->push_back(".\\");
+#else
+      logging_directories_list->push_back("./");
+#endif
+    }
+  }
+  return *logging_directories_list;
+}
+
+void TestOnly_ClearLoggingDirectoriesList() {
+  fprintf(stderr, "TestOnly_ClearLoggingDirectoriesList should only be "
+          "called from test code.\n");
+  delete logging_directories_list;
+  logging_directories_list = nullptr;
+}
+
+void GetExistingTempDirectories(vector<string>* list) {
+  GetTempDirectories(list);
+  auto i_dir = list->begin();
+  while (i_dir != list->end()) {
+    // zero arg to access means test for existence; no constant
+    // defined on windows
+    if (access(i_dir->c_str(), 0)) {
+      i_dir = list->erase(i_dir);
+    } else {
+      ++i_dir;
+    }
+  }
+}
+
+void TruncateLogFile(const char* path, uint64 limit, uint64 keep) {
+#ifdef HAVE_UNISTD_H
+  struct stat statbuf;
+  const int kCopyBlockSize = 8 << 10;
+  off_t read_offset, write_offset;
+  // Don't follow symlinks unless they're our own fd symlinks in /proc
+  int flags = O_RDWR;
+  // TODO(hamaji): support other environments
+#ifdef GLOG_OS_LINUX
+  const char *procfd_prefix = "/proc/self/fd/";
+  if (strncmp(procfd_prefix, path, strlen(procfd_prefix))) flags |= O_NOFOLLOW;
+#endif
+
+  int fd = open(path, flags);
+  if (fd == -1) {
+    if (errno == EFBIG) {
+      // The log file in question has got too big for us to open.The
+      // real fix for this would be to compile loggin.cc (or probably
+      // all of base/ ...) with -D_FILE_OFFSET_BITS=64 but that's 
+      // rather scary
+      // Instead just truncate the file to something we can manage
+      if (truncate(path, 0) == -1) {
+        PLOG(ERROR) << "Unable to truncate " << path;
+      } else {
+        LOG(ERROR) << "Truncate " << path << " due to EFBIG error";
+      }
+    } else {
+      PLOG(ERROR) << "Unable to open " << path;
+    }
+    return;
+  }
+
+  if (fstat(fd, &statbuf) == -1) {
+    PLOG(ERROR) << "Unable to fstat()";
+    goto out_close_fd;
+  }
+
+  // see if the path refers to a regular file bigger than the
+  // specify limit
+  if (!S_ISREG(statbuf.st_mode)) goto out_close_fd;
+  if (statbuf.st_size <= static_cast<off_t>(limit)) goto out_close_fd;
+  if (statbuf.st_size <= static_cast<off_t>(keep)) goto out_close_fd;
+
+  // This log file is too large - we need to truncate it
+  LOG(INFO) << "Truncating " << path << " to " << keep << " bytes";
+
+  // Copy the last "keep" bytes of the file to the begining of the file
+  read_offset = statbuf.st_size - static_cast<off_t>(keep);
+  write_offset = 0;
+
+  ssize_t bytesin, bytesout;
+  while ((bytesin = pread(fd, copybuf, sizeof(copybuf), read_offset)) > 0) {
+    bytesout = pwrite(fd, copybuf, static_cast<size_t>(bytesin), write_offset);
+    if (bytesout == -1) {
+      PLOG(ERROR) << "Unable to write to " << path;
+      break;
+    } else if (bytesout != bytesin) {
+      LOG(ERROR) << "Expected to write " << bytesin << ", wrote " << bytesout;
+    }
+    read_offset += bytesin;
+    write_offset += bytesout;
+  }
+
+  if (bytesin == -1) PLOG(ERROR) << "Unable to read from " << path;
+
+  // Truncate the remainder of the file. If someone else writes to the 
+  // end of the file after out last read() above , we lose their latest
+  // data. Too bad ...
+  if (ftruncate(fd, write_offset) == -1) {
+    PLOG(ERROR) << "Unable to truncate " << path;
+  }
+
+  out_close_fd;
+  close(fd);
+#else
+  LOG(ERROR) << "No log truncation support.";
+#endif
+}
+
+void TruncateStdoutStderr() {
+#ifdef HAVE_UNISTD_H
+  uint64 limit = MaxLogSize() << 20U;
+  uint64 keep = 1U << 20U;
+  TruncateLogFile("/proc/self/fd/1", limit, keep);
+  TruncateLogFile("/proc/self/fd/2", limit, keep);
+#else
+  LOG(ERROR) << "No log truncation support.";
+#endif
+}
+
+// Helper functions for string comparisions.
+#define DEFINE_CHECK_STROP_IMPL(name, func, expected)                         \
+  string* Check##function##exception##Impl(const char* s1, const char* s2     \
+      const char* names) {                                                    \
+    bool equal = s1 == s2 || (s1 && s2 && !func(s1, s2));                     \
+    if (equal == expected) {                                                  \
+      return nullptr;                                                         \
+    } else {                                                                  \
+      ostringstream ss;                                                       \
+      if (!s1) s1 = "";                                                       \
+      if (!s2) s2 = "";                                                       \
+      ss << #name " failed: " << names << " (" << s1 << " vs. " << s2 << ")"; \
+      return new string(ss.str());                                            \
+    }                                                                         \
+  }
+
+DEFINE_CHECK_STROP_IMPL(CHECK_STREQ, strcmp, true);
+DEFINE_CHECK_STROP_IMPL(CHECK_STRNE, strcmp, false);
+DEFINE_CHECK_STROP_IMPL(CHECK_STRCASEEQ, strcasecmp, true);
+DEFINE_CHECK_STROP_IMPL(CHECK_STRCASENE, strcasecmp, false);
+#undef DEFINE_CHECK_STROP_IMPL
+
+int posix_strerror_r(int err, char* buf, size_t len) {
+  // Sanity check input parameters
+  if (buf == nullptr || len <= 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  // Reset buf and errno, and try calling whatever version of strerror_r()
+  // is implemented by glibc
+  buf[0] = '\000';
+  int old_errno = errno;
+  errno = 0;
+  char* rc = reinterpret_cast<char*>(strerror_r(err, buf, len));
+
+  // Both versions set errno on failure
+  if (errno) {
+    // Should already be here, but better safe than sorry
+    buf[0] = '\000';
+    return -1;
+  }
+  errno = old_errno;
+
+  // POSIX is vague about whether the string will be terminated, although
+  // is indirectly implies that typically ERANGE will be returned, instead
+  // of truncating the string. This is different from the GUNC implementation.
+  // We play it safe by always terminating the string explicitly.
+  buf[len-1] = '\000';
+
+  // If the function succeeded , we can use its exit code to determine the 
+  // semantics implemented by glic
+  if (!rc) {
+    return 0;
+  } else {
+    // GNU semantics detected
+    if (rc == buf) {
+      return 0;
+    } else {
+      buf[0] = '\000';
+#if defined(GLOG_OS_MACOSX) || defined(GLOG_OS_FREEBSD) || defined(GLOG_OS_OPENBSD)
+      if (reinterpret_cast<intptr_t>(rc) < sys_nerr) {
+        // This means an error on MacOSX or FreeBSD.
+        return -1;
+      }
+#endif
+      strncat(buf, rc, len-1);
+      return 0;
+    }
+  }
+}
+
+string StrError(int err) {
+  char buf[100];
+
+  int rc = posix_strerror_r(err, buf, sizeof(buf));
+  if ((rc < 0) || (buf[0] == '\000')) {
+    snprintf(buf, sizeof(buf), "Error number %d", err);
+  }
+  return buf;
+}
+
+LogMessageFatal::LogMessageFatal(const char* file, int line) :
+  LogMessage(file, line, GLOG_FATAL) {}
+
+LogMessageFatal::LogMessageFatal(const char* file, int line,
+                                 const CheckOpsString& result) : 
+  LogMessage(file, line, result) {}
+
+LogMessageFatal::~LogMessageFatal() {
+  Flush();
+  LogMessage::Fail();
+}
+
+namespace base {
+CheckOpMessageBuilder::CheckOpMessageBuilder(const char* exprtext)
+  : stream_(new ostringstream) {
+    *stream_ << exprtext << " (";
+}
+
+CheckOpMessageBuilder::~CheckOpMessageBuilder() {
+  delete stream_;
+}
+
+ostream* CheckOpMessageBuilder::ForVar2() {
+  *stream_ << " vs. ";
+  return stream_;
+}
+
+string* CheckOpMessageBuilder::NewString() {
+  *stream_ << ")";
+  return new string(stream_->str());
+}
+}
+
+template <>
+void MakeCheckOpValueString(std::ostream* os, const char& v) {
+  if (v >= 32 && v <= 126) {
+    (*os) << "'" << v << "'";
+  } else {
+    (*os) << "char value " << static_cast<short>(v);
+  }
+}
+
+template<>
+void MakeCheckOpValueString(std::ostream* os, const signed char& v) {
+  if (v >= 32 && v <= 126) {
+    (*os) << "'" << v << "'";
+  } else {
+    (*0s) << "signed char value " << static_cast<short>(v);
+  }
+}
+
+template <>
+void MakeCheckOpValueString(std::string* os, const unsigned char& v ) {
+  if (v >= 32 && v <= 126) {
+    (*os) << "'" << v << "'";
+  } else {
+    (*os) << "unsigned char value " << static_cast<unsigned short>(v);
+  }
+}
+
+template<>
+void MakeCheckOpValueString(std::ostream* os, const std::nullptr_t& ) {
+  (*os) << "nullptr";
+}
+
+void InitGoogleLogging(const char* argv0) {
+  glog_internal_namespace_::InitGoogleLoggingUtilities(argv0);
+}
+
+void InitGoogleLogging(const char* argv0,
+                       CustomPrefixCallback prefix_callback,
+                       void* prefix_callback_data) {
+  custom_prefix_callback = prefix_callback;
+  custom_prefix_callback_data = prefix_callback_data;
+  InitGoogleLogging(argv0);
+}
+
+void ShutdownGoogleLogging() {
+  glog_internal_namespace_::ShutdownGoogleLoggingUtilities();
+  LogDestination::DeleteLogDestinations();
+  delete logging_directories_list;
+  logging_directories_list = nullptr;
+}
+
+void EnableLogCleaner(unsigned int overdue_days) {
+  log_cleaner.Enable(overdue_days);
+}
+
+void DisableLogCleaner(unsigned int overdue_days) {
+  log_cleaner.Disable();
+}
+
+LogMessageTime::LogMessageTime()
+  : time_struct_(), timestamp_(0), usecs_(0), gmtoffset_(0) {}
+
+LogMessageTime::LogMessageTime(std::tm t) {
+  std::time_t timestamp = std::mktime(&t);
+  init(t, timestamp, 0);
+}
+
+LogMessageTime::LogMessageTime(std::time_t timestamp, WallTime now) {
+  std::tm t;
+  if (FLAGS_log_utc_time) {
+    gmtime_r(&timestamp, &t);
+  } else {
+    localtime_r(&timestamp, &t);
+  }
+  init(t, timestamp, now);
+}
+
+void LogMessage::init(const std::tm& t, std::time_t timestamp,
+    WallTime now) {
+  time_struct_ = t;
+  timestamp_ = timestamp;
+  usecs_ = static_cast<int32>((now - timestamp) * 1000000);
+
+  CalcGmtOffset();
+}
+
+void LogMessageTime::CalcGmtOffset() {
+  std::tm gmt_struct;
+  int isDst = 0;
+  if (FLAGS_log_utc_time) {
+    localtime_r(&timestamp_, &gmt_struct);
+    isDst = gmt_struct.tm_isdst;
+    gmt_struct = time_struct_;
+  } else {
+    isDst = time_struct_.tm_isdst;
+    gmtime_r(&timestamp_, &gmt_struct);
+  }
+
+  time_t gmt_sec = mktime(&gmt_struct);
+  const long hour_secs = 3600;
+
+  // If the Daylight Saving time (isDst) is active subtract an hour from the
+  // current timestamp.
+  gmtoffset_ = static_cast<long int>(timestamp_ - gmt_sec + (isDst ? hour_secs : 0));
+}
+
+_END_GOOGLE_NAMESPACE_
