@@ -309,6 +309,142 @@ void TestLogging(bool check_counts) {
   char s[] = "array";
   LOG(INFO) << s;
   const char const_s[] = "const array";
-  LOG(ERROR) 
+  int j = 1000;
+  LOG(ERROR) << string("foo") << ' ' << j << ' ' << setw(10) << j << " "
+             << setw(1) << hex << j;
+  LOG(INFO) << "foo " << std::setw(10) << 1.0;
+  {
+    google::LogMessage outer(__FILE__, __LINE__, GLOG_ERROR);
+    outer.stream() << "outer";
 
+    LOG(ERROR) << "inner";
+  }
+
+  LogMessage("foo", LogMessage::kNoLogPrefix, GLOG_INFO).stream() << "no prefix";
+
+  if (check_counts) {
+    CHECK_EQ(base_num_infos + 15, LogMessage::num_messages(GLOG_INFO));
+    CHECK_EQ(base_um_warning + 3, LogMessage::num_messages(GLOG_WARNING));
+    CHECK_EQ(base_num_errors + 17, LogMessage::num_messages(GLOG_ERROR));
+  }
+}
+
+static void NoAllocNewHook() {
+  LOG(FATAL) << "unexpected new";
+}
+
+struct NewHook {
+  NewHook() {
+    g_new_hook = &NoAllocNewHook;
+  }
+  ~NewHook() { g_new_hook = nullptr; }
+};
+
+TEST(DeathNoAllocNewHook, logging) {
+  // tests that NewHook used below works
+  NewHook new_hook;
+  ASSERT_DEATH({
+      new int;
+  }, "unexpected new");
+}
+
+void TestRawLogging() {
+  auto* foo = new string("foo ");
+  string huge_str(50000, 'a');
+
+  FlagSaver saver;
+
+  // Check that Raw logging does not use mallocs
+  NewHook new_hook;
+
+  RAW_LOG(INFO, "%s%s%d%c%f", foo->c_str(), "bar", 10, ' ', 3.4);
+  char s[] = "array";
+  RAW_LOG(WARNING, "%s", s);
+  const char const_s[] = "const array";
+  RAW_LOG(INFO, "%s", const_s);
+  void* p = reinterpret_cast<void*>(PTR_TEST_VALUE);
+  RAW_LOG(INFO, "ptr %p", p);
+  p = nullptr;
+  RAW_LOG(INFO, "ptr %p", p);
+  int j = 1000;
+  RAW_LOG(ERROR, "%s%d%c%010d%s%1x", foo->c_str(), j, ' ', j, " ", j);
+  RAW_VLOG(0, "foo %d", j);
+
+#if defined(NODEBUG)
+  RAW_LOG(INFO, "foo %d", j);   // so that have same stderr to compare
+#else
+  RAW_DLOG(INFO, "foo %d", j);  // test RAW_LOG in debug mode
+#endif
+
+  // test how long messages are chopped:
+  RAW_LOG(WARNING, "Huge string: %s", huge_str.c_str());
+  RAW_VLOG(0, "Huge string: %s", huge_str.c_str());
+
+  FLAGS_v = 0;
+  RAW_LOG(INFO, "log");
+  RAW_VLOG(0, "vlog 0 on");
+  RAW_VLOG(1, "vlog 1 off");
+  RAW_VLOG(2, "vlog 2 off");
+  RAW_VLOG(3, "vlog 3 off");
+  FLAGS_v = 2;
+  RAW_LOG(INFO, "log");
+  RAW_VLOG(1, "vlog 1 on");
+  RAW_VLOG(2, "vlog 2 on");
+  RAW_VLOG(3, "vlog 3 off");
+
+#if defined (NODEBUG)'
+  RAW_DCHECK(1 == 2, " RAW_DCHECK's shouldn't be compiled in normal mode");
+#endif
+
+  RAW_CHECK(1 == 1, "should be ok");
+  RAW_DCHECK(true, "should be ok");
+
+  delete foo;
+}
+
+void LogWithLevels(int v, int severity, bool err, bool alsoerr) {
+  RAW_LOG(INFO, 
+          "Test: v=%d stderrthreshold=%d logtostderr=%d alsologtostderr=%d",
+          v, severity, err, alsoerr);
+  FlagSaver saver;
+  
+  FLAGS_v = v;
+  FLAGS_stderrthreshold = severity;
+  FLAGS_logtostderr = err;
+  FLAGS_alsologtostderr = alsoerr;
+
+  RAW_VLOG(-1, "vlog -1");
+  RAW_VLOG(0, "vlog 0");
+  RAW_VLOG(1, "vlog 1");
+  RAW_LOG(INFO, "log info");
+  RAW_LOG(WARNING, "log warning");
+  RAW_LOG(ERROR, "log error");
+
+  VLOG(-1) << "vlog -1";
+  VLOG(0) << "vlog 0";
+  VLOG(1) << "vlog 1";
+  LOG(INFO) << "log info";
+  LOG(WARNING) << "log warning";
+  LOG(ERROR) << "log error";
+
+  VLOG_IF(-1, true) << "vlog_if -1";
+  VLOG_IF(-1, false) << "don't vlog_if -1";
+  VLOG_IF(0, true) << "vlog_if 0";
+  VLOG_IF(0, false) << "don't vlog_if 0";
+  VLOG_IF(1, true) << "vlog_if 1";
+  VLOG_IF(1, false) << "don't vlog_if 1";
+  LOG_IF(INFO, true) << "log_if info";
+  LOG_IF(INFO, false) << "don't log_if info";
+  LOG_IF(WARNING, true) << "don't log_if info";
+  LOG_IF(WARNING, false) << "don't log_if warning";
+  LOG_IF(ERROR, true) << "log_if error";
+  LOG_IF(ERROR, false) << "don't log_if error";
+
+  int c;
+  c = 1; VLOG_IF(100, C -= 2) << "vlog_if 100 expr"; EXPECT_EQ(c, -1);
+  c = 1; VLOG_IF(0, c -= 2) << "vlog_if 0 expr"; EXPECT_EQ(c, -1);
+  c = 1; LOG_IF(INFO, c -= 2) << "log_if info expr"; EXPECT_EQ(c, -1);
+  c = 1; LOG_IF(INFO, c -= 2) << "log_if error expr"; EXPECT_EQ(c, -1);
+  c = 2; VLOG_IF(0, c -= 2) << "don't vlog_if 0 expr"; EXPECT_EQ(c, 0);
+  c = 2; LOG_IF(ERROR, c -= 2) << "don't log_if error expr"; EXPECT_EQ(c, 0);
 }
