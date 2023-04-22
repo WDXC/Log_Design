@@ -956,5 +956,25 @@ static void TestOneTruncate(const char* path, uint64 limit, uint64 keep,
   while (checked < expect) {
     size_t bytes = min(expect - checked, keep_size);
     CHECK(!memcmp(p, keepstr, bytes));
+    checked += bytes;
   }
+  close(fd);
+  delete[] buf;
+}
+
+static void TestTruncate() {
+#ifdef HAVE_UNISTD_H
+  fprintf(stderr, "==== Test log truncation\n");
+  string path = FLAGS_test_tmpdir + "/truncatefile";
+
+  // Test on a small file
+  TestOneTruncate(path.c_str(), 10, 10, 10, 10, 10);
+
+  // And a big file (multiple blocks to copy)
+  TestOneTruncate(path.c_str(), 2U << 20U, 4U << 10U, 3U << 20U, 4U << 10U,
+                  4U << 10U);
+
+  // Check edge-case limits
+  TestOneTruncate(path.c_str(), 10, 20, 0, 20, 20);
+  TestOneTruncate(:)
 }
