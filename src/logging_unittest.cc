@@ -956,5 +956,109 @@ static void TestOneTruncate(const char* path, uint64 limit, uint64 keep,
   while (checked < expect) {
     size_t bytes = min(expect - checked, keep_size);
     CHECK(!memcmp(p, keepstr, bytes));
+    checked += bytes;
   }
+
+  close(fd);
+  delete[] buf;
+}
+
+static void TestTruncate(){
+#ifdef HAVE_UNISTD_H
+    fprintf(stderr, "==== Test log truncation\n");
+    string path = FLAGS_test_tmpdir + "/truncatefile";
+
+    // Test on a small file
+    TestOneTruncate(path.c_str(), 10, 10, 10, 10, 10);
+
+    // And a big file (multiple blocks to copy)
+    TestOneTruncate(path.c_str(), 2U << 20U, 4U << 10U, 3U << 20U, 4U << 10U,
+                    4U << 10U);
+
+    // Check edge-case limits
+    TestOneTruncate(path.c_str(), 10, 20, 0, 20, 20);
+    TestOneTruncate(path.c_str(), 10, 0, 0, 0, 0);
+    TestOneTruncate(path.c_str(), 10, 50, 0, 10, 10);
+    TestOneTruncate(path.c_str(), 50, 100, 0, 30, 30);   
+
+    // MacOSX 10.4 doesn't fail in this case.
+    // Windows doesn't have symlink
+    // Let's just ignore this test for these case
+#if !defined(GLOG_OS_MACOSX) && !defined(GLOG_OS_WINDOWS) 
+    // Through a symlink should fail to truncate
+    string linkname = path + ".link";
+    unlink(linkname.c_str());
+    CHECK_ERR(symlink(path.c_str(), linkname.c_str()));
+    TestOneTruncate(linkname.c_str(), 10, 10, 0, 30, 30);
+#endif
+
+    // The /proc/self path makes sense only for linux
+#if defined(GLOG_OS_LINUX)
+    // Through an open fd symlink should work
+    int fd;
+    CHECK_ERR(fd = open(path.c_str(), O_APPEND | O_WRONLY));
+    char fdpath[64];
+    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", fd);
+    TestOneTruncate(fdpath, 10, 10, 10, 10, 10);
+#endif
+#endif
+}
+
+struct RecordDeletionLogger : public Logger {
+    RecordDeletionLogger(bool* set_on_destruction,
+                         base::Logger* wrapped_logger) :
+        set_on_destruction_(set_on_destruction),
+        wrapped_logger_(wrapped_logger)
+    {
+        *set_on_destruction_ = false;
+    }
+
+    ~RecordDeletionLogger() override { *set_on_destruction_ = true; }
+    void Write(bool force_flush, time_t timestamp, const char* message,
+            size_t length) override {
+        wrapped_logger_->Write(force_flush, timestamp, message, length);
+    }
+
+    void Flush() override { wrapped_logger_->Flush(); }
+    uint32 LogSize() override { return wrapped_logger_->LogSize(); }
+    private:
+        bool* set_on_destruction_;
+        base::Logger* wrapped_logger_;
+};
+
+static void TestCustomLoggerDeletionOnShutdown() {
+    bool custom_logger_deleted = false;
+    base::SetLogger(GLOG_INFO,
+                    new RecordDeletionLogger(&custom_logger_deleted,
+                                             base::GetLogger(GLOG_INFO)));
+    EXPECT_TRUE(IsGoogleLoggingInitialized());
+    ShutdownGoogleLogging();
+    EXPECT_TRUE(custom_logger_deleted);
+    EXPECT_FALSE(IsGoogleLoggingInitialized());
+}
+
+namespace LogTimes {
+// Log a "message" every 10ms, 10 times. These numbers are nice compromise
+// between total running time of 100ms and the period of 10ms. The period is
+// large enough such that any CPU and OS scheduling variation shouldn't affect
+// the results from the ideal case by more than 5% (500us or 0.5ms)
+constexpr int64_t LOG_PERIOD_NS = 10000000;    // 10ms
+constexpr int64_t LOG_PERIOD_TOL_NS = 500000;  // 500us
+
+// Set an upper limit for the number of times the stream operator can be
+// called. Make sure not to exceed this number of times the stream operator is
+// called, since it is also the array size and will be indexed by the stream
+// operator.
+constexpr size_t MAX_CALLS = 10;
+}
+
+struct LogTimeRecorder {
+    LogTimeRecorder() = default;
+    size_t m_streamTimes{0};
+    std::chrono::steady_clock::time_point m_callTimes[LogTimes::MAX_CALLS];
+};
+
+std::ostream& operator<<(std::ostream& stream, LogTimeRecorder& t) {
+    t.m_callTimes[t.m_streamTimes++] = std::chrono::steady_clock::now();
+    return stream;
 }
