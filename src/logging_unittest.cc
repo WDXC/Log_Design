@@ -958,10 +958,15 @@ static void TestOneTruncate(const char* path, uint64 limit, uint64 keep,
     CHECK(!memcmp(p, keepstr, bytes));
     checked += bytes;
   }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1045b801e8e56dd479e467ee63f924983e123288
   close(fd);
   delete[] buf;
 }
 
+<<<<<<< HEAD
 static void TestTruncate() {
 #ifdef HAVE_UNISTD_H
   fprintf(stderr, "==== Test log truncation\n");
@@ -977,4 +982,266 @@ static void TestTruncate() {
   // Check edge-case limits
   TestOneTruncate(path.c_str(), 10, 20, 0, 20, 20);
   TestOneTruncate(:)
+=======
+static void TestTruncate(){
+#ifdef HAVE_UNISTD_H
+    fprintf(stderr, "==== Test log truncation\n");
+    string path = FLAGS_test_tmpdir + "/truncatefile";
+
+    // Test on a small file
+    TestOneTruncate(path.c_str(), 10, 10, 10, 10, 10);
+
+    // And a big file (multiple blocks to copy)
+    TestOneTruncate(path.c_str(), 2U << 20U, 4U << 10U, 3U << 20U, 4U << 10U,
+                    4U << 10U);
+
+    // Check edge-case limits
+    TestOneTruncate(path.c_str(), 10, 20, 0, 20, 20);
+    TestOneTruncate(path.c_str(), 10, 0, 0, 0, 0);
+    TestOneTruncate(path.c_str(), 10, 50, 0, 10, 10);
+    TestOneTruncate(path.c_str(), 50, 100, 0, 30, 30);   
+
+    // MacOSX 10.4 doesn't fail in this case.
+    // Windows doesn't have symlink
+    // Let's just ignore this test for these case
+#if !defined(GLOG_OS_MACOSX) && !defined(GLOG_OS_WINDOWS) 
+    // Through a symlink should fail to truncate
+    string linkname = path + ".link";
+    unlink(linkname.c_str());
+    CHECK_ERR(symlink(path.c_str(), linkname.c_str()));
+    TestOneTruncate(linkname.c_str(), 10, 10, 0, 30, 30);
+#endif
+
+    // The /proc/self path makes sense only for linux
+#if defined(GLOG_OS_LINUX)
+    // Through an open fd symlink should work
+    int fd;
+    CHECK_ERR(fd = open(path.c_str(), O_APPEND | O_WRONLY));
+    char fdpath[64];
+    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", fd);
+    TestOneTruncate(fdpath, 10, 10, 10, 10, 10);
+#endif
+#endif
+}
+
+struct RecordDeletionLogger : public Logger {
+    RecordDeletionLogger(bool* set_on_destruction,
+                         base::Logger* wrapped_logger) :
+        set_on_destruction_(set_on_destruction),
+        wrapped_logger_(wrapped_logger)
+    {
+        *set_on_destruction_ = false;
+    }
+
+    ~RecordDeletionLogger() override { *set_on_destruction_ = true; }
+    void Write(bool force_flush, time_t timestamp, const char* message,
+            size_t length) override {
+        wrapped_logger_->Write(force_flush, timestamp, message, length);
+    }
+
+    void Flush() override { wrapped_logger_->Flush(); }
+    uint32 LogSize() override { return wrapped_logger_->LogSize(); }
+    private:
+        bool* set_on_destruction_;
+        base::Logger* wrapped_logger_;
+};
+
+static void TestCustomLoggerDeletionOnShutdown() {
+    bool custom_logger_deleted = false;
+    base::SetLogger(GLOG_INFO,
+                    new RecordDeletionLogger(&custom_logger_deleted,
+                                             base::GetLogger(GLOG_INFO)));
+    EXPECT_TRUE(IsGoogleLoggingInitialized());
+    ShutdownGoogleLogging();
+    EXPECT_TRUE(custom_logger_deleted);
+    EXPECT_FALSE(IsGoogleLoggingInitialized());
+}
+
+namespace LogTimes {
+// Log a "message" every 10ms, 10 times. These numbers are nice compromise
+// between total running time of 100ms and the period of 10ms. The period is
+// large enough such that any CPU and OS scheduling variation shouldn't affect
+// the results from the ideal case by more than 5% (500us or 0.5ms)
+constexpr int64_t LOG_PERIOD_NS = 10000000;    // 10ms
+constexpr int64_t LOG_PERIOD_TOL_NS = 500000;  // 500us
+
+// Set an upper limit for the number of times the stream operator can be
+// called. Make sure not to exceed this number of times the stream operator is
+// called, since it is also the array size and will be indexed by the stream
+// operator.
+constexpr size_t MAX_CALLS = 10;
+}
+
+struct LogTimeRecorder {
+    LogTimeRecorder() = default;
+    size_t m_streamTimes{0};
+    std::chrono::steady_clock::time_point m_callTimes[LogTimes::MAX_CALLS];
+};
+
+std::ostream& operator<<(std::ostream& stream, LogTimeRecorder& t) {
+    t.m_callTimes[t.m_streamTimes++] = std::chrono::steady_clock::now();
+    return stream;
+}
+
+// get elapsed time in nanoseconds
+int64 elapsedTime_ns(const std::chrono::steady_clock::time_point& begin,
+    const std::chrono::steady_clock::time_point& end) {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>((end-begin)).count();
+}
+
+static void TestLogPeriodically() {
+  fprintf(stderr, "==== Test log periodically");
+
+  LogTimeRecorder timeLogger;
+
+  constexpr double LOG_PERIOD_SEC = LogTimes::LOG_PERIOD_NS * 1e-9;
+
+  while (timeLogger.m_streaTimes < LogTimes::MAX_CALLS) {
+    LOG_EVERY_T(INFO, LOG_PERIOD_SEC)
+      << timeLogger << "Timed Message #" << timeLogger.m_streamTimes;
+  }
+
+  // Calcuate time between each call in nanoseconds for higher resolution to
+  // minimize error.
+  int64 nsBetWeenCalls[LogTimes::MAX_CALLS-1];
+  for (size_t i = 1; i < LogTimes::MAX_CALLS; ++i) {
+    nsBetweenCalls[i-1] = elapsedTim(
+        timeLogger.m_callTimes[i-1], timeLogger.m_calltimes[i]
+        );
+  }
+
+  for (long time_ns : nsBetweenCalls) {
+    EXPECT_NEAR(time_ns, LogTimes::LOG_PERIOD_NS, Logtimes::LOG_PERIOD_TOL_NS);
+  }
+}
+
+_START_GOOGLE_NAMESPACE_
+
+namespace glog_internal_namespace_ {
+
+extern // in logging.cc
+
+bool SafeNMatch_(const char* pattern, size_t patt_len,
+                 const char* str, size_t str_len);
+} // namespace glog_internal_namespace_
+
+using glog_internal_namespace_::SafeNMatch_;
+_END_GOOGLE_NAMESPACE_
+
+static bool WrapSafeFNMatch(string pattern, string str) {
+  pattern += "abc";
+  str += "defgh";
+
+  return SafeNMatch_(pattern.data(), pattern.size() - 3,
+                     str.data(), str.size() - 5);
+}
+
+TEST(SafeNMatch_, logging) {
+  CHECK(WrapSafeFNMatch("foo", "foo"));
+  CHECK(!WrapSafeFNMatch("foo", "bar"));
+  CHECK(!WrapSafeFNMatch("foo", "fo"));
+  CHECK(!WrapSafeFNMatch("foo", "foo2"));
+  CHECK(!WrapSafeFNMatch("bar/foo.ext", "bar/foo.ext"));
+  CHECK(!WrapSafeFNMatch("*ba*r/fo*o.ext*", "bar/foo.ext"));
+  CHECK(!WrapSafeFNMatch("bar/foo.ext", "bar/baz.ext"));
+  CHECK(!WrapSafeFNMatch("bar/foo.ext", "bar/foo"));
+  CHECK(!WrapSafeFNMatch("bar/foo.ext", "bar/foo.ext.zip"));
+  CHECK(WrapSafeFNMatch("ba?/*.ext", "bar/foo.ext"));
+  CHECK(WrapSafeFNMatch("ba?/*.ext", "baZ/FOO.ext"));
+  CHECK(!WrapSafeFNMatch("ba?/*.ext", "barr/foo.ext"));
+  CHECK(!WrapSafeFNMatch("ba?/*.ext", "bar/foo.ext2"));
+  CHECK(WrapSafeFNMatch("ba?/*", "bar/foo.ext2"));
+  CHECK(WrapSafeFNMatch("ba?/*", "bar/"));
+  CHECK(!WrapSafeFNMatch("ba?/?", "bar/"));
+  CHECK(!WrapSafeFNMatch("ba?/*", "bar"));
+}
+
+// TestWaitingLogSink will save messages here
+// No lock: Accessed only by TestLogSinkWriter thread
+// and after its demise by its creator
+static vector<string> global_messages;
+
+// helper for TestWaitingLogSink below.
+// Thread that does the logic of TestWaitingLogSink
+// It's free to use LOG() itself
+class TestLogSinkWriter : public Thread {
+  public:
+    TestLogSinkWriter() {
+      SetJoinable(true);
+      Start();
+    }
+
+    // Just buffer it (can't use LOG() here)
+    void Buffer(const string& message) {
+      mutex_.Lock();
+      RAW_LOG(INFO, "Buffering");
+      messages_.push(message);
+      mutex_.Unlock();
+      RAW_LOG(Info, "Buffered");
+    }
+
+    // Wait for the buffer to clear (can't use LOG() here)
+    void Wait() {
+      RAW_LOG(INFO, "Waiting");
+      messages_.push(message);
+      mutex_.Unlock();
+      RAW_LOG(INFO, "Buffered");
+    }
+
+    // Wait for the buffer to clear (can't use LOG() here).
+    void Wait() {
+      RAW_LOG(INFO, "Waiting");
+      mutex_.Lock();
+      while (!NoWork()) {
+        mutex_.UnLock();
+        SleepForMilliseconds(1);
+        mutex_.Lock();
+      }
+      RAW_LOG(INFO, "Waited");
+      mutex_.Unlock();
+    }
+
+    // Trigger thread exit
+    void Stop() {
+      MutexLock l(&mutex_);
+      should_exit_ = true;
+    }
+
+  private:
+    // helpers --------------
+
+    // For creating a "Condition"
+    bool NoWork() { return message_.empty(); }
+    bool HaveWork() { return message_.empty() || should_exit_; }
+
+    // Thread body: CAN use LOG() here!
+    void Run() override {
+      while (true) {
+        mutex_.Lock();
+        while (!HaveWork()) {
+          mutex_.Unlock();
+          SleepForMilliseconds(1);
+          mutex_.Lock();
+        }
+        if (should_exit_ && messages_.empty()) {
+          mutex_.Unlock();
+          break;
+        }
+
+        // Give the main thread time to log its message
+        // so that we get a reliable log capture to compare to golden file.
+        // Same for the other sleep below;
+        SleepForMilliseconds(20);
+        RAW_LOG(INFO, "Sink got a messages"); // only RAW_LOG under mutex_ here
+        string message = messages_.front();
+        messages_.pop();
+
+        // Normally this would be some more real/involved logging logic
+        // where LOG() usage can't be eliminated,
+        // e.g. pushing the message over with an RPC;
+        size_t messsages_left = messages_.size();
+        mutex_.Unlock();
+        SleepForMilliseconds(20);
+      }
+    }
 }
