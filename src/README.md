@@ -242,7 +242,7 @@ DEFINE_CHECK_STROP_IMPL(CHECK_STRCASENE, strcasecmp, false)
 3. DeathSTREQ
 4. CheckNOTNULL
 5. DeathCheckNN
-6. SafeNMatch
+6. SafeFNMatch
 7. Strerror
 8. DVLog
 9. LogAtLevel
@@ -324,8 +324,42 @@ while (google::CheckOpString _result =
 但是这些日志都是在测试Fatal等级的日志
 
 CheckNotNull 测试目的:
+1. 这里代码流程走的是 reuturn Forward<T>(t)，所以日志上没有什么返回值
+2. 这里也需要注意的是，int
+   作为基础类型，一但被定义那么它就不在是空值，这里的test也是因此而通过了判空测试
 
-  
+DeathCheckNN 测试目的:
+1. 这里对CHECK_NOTNULL 进行了一个失败的测试，这样也是通过了测试
+
+SafeFNMatch 测试目的:
+1. 这里基于fnmatch()重写了一个状态机，对字符进行比较
+
+Strerror 测试目的:
+1.
+这里测试了errorcode的信息，不过考虑到POSIX与GUN在设计的不同，设置errorcode信息时，采用了不同的表示方式
+
+DVLOG 测试目的:
+EXPECT_CALL 是Google Mock
+框架下的一个函数，传入一个mock对象，并根据提供一个需要测试的函数
+EXPECT_CALL(log, Log(GLOG_INFO, __FILE__), "debug log");
+DVLOG(1) << "debug log"
+在这里 google mock框架会自动验证 `EXPECT_CALL`中设置的预期调用
+它会调用log.Log函数 是否会如预期被调用一次，并且参数是否一致
+
+
+ LogAtLevel 测试目的:
+是一个Mock的测试
+
+TestExitOnDFatal
+mock函数
+
+LogBacktraceAt
+
+UserDefinedClass
+
+LogMsgTime
+
+Mock流程
 
 
 # 难点问题
