@@ -352,14 +352,13 @@ DVLOG(1) << "debug log"
 
 TestExitOnDFatal
 mock函数
-
 LogBacktraceAt
-
 UserDefinedClass
-
 LogMsgTime
-
 Mock流程
+
+__attribute__((use)) 是用于添加宏测试信息
+但是其仅作用于参数值，而无法作用于函数定义
 
 
 # 难点问题
