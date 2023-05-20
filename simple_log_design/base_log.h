@@ -9,27 +9,77 @@
 #ifndef BASE_LOG_H_
 #define BASE_LOG_H_
 
+
 #include <iostream>
-#include <cstdio>
-#include <string>
+#include <fstream>
+#include <ctime>
+#include <sstream>
 
-using std::string;
+enum LogSeverity { DEBUG, INFO, WARNING, ERROR };
 
-#define MAX_LOG_INFO 65535
-const int DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3;
+class LogStream {
+public:
+    LogStream(const char* file, int line, const char* func, LogSeverity severity)
+        : file_(file), line_(line), func_(func), level_(severity) {}
 
-class QLog {
-  public:
-    std::ostream& stream();
-    void WriteLog(const char* file, int line, string level, ...);
+    ~LogStream() {
+        std::string log_msg = formatLogMessage();
+        writeToConsole(log_msg);
+    }
 
-  private:
-    QLog() : buffer() {}
-    static QLog log_instance;
-    char buffer[MAX_LOG_INFO];
+    template <typename T>
+    LogStream& operator<<(const T& value) {
+        stream_ << value;
+        return *this;
+    }
+
+private:
+    std::string formatLogMessage() {
+        std::stringstream ss;
+        ss << "[" << getCurrentTime() << "] ";
+        ss << "[" << getLogLevelString() << "]";
+        ss << "[" << file_ << ":" << line_ << "] ";
+        ss << "[" << func_ << "] ";
+        ss << stream_.str();
+        return ss.str();
+    }
+
+    std::string getCurrentTime() {
+        std::time_t now = std::time(nullptr);
+        char time_str[20];
+        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+        return time_str;
+    }
+
+
+    std::string getLogLevelString() {
+      switch (level_) {
+        case LogSeverity::DEBUG:
+          return "DEBUG";
+        case LogSeverity::INFO:
+          return "INFO";
+        case LogSeverity::WARNING:
+          return "WARNING";
+        case LogSeverity::ERROR:
+          return "ERROR";
+        default:
+          return "UNKNOWN";
+      }
+    }
+
+    void writeToConsole(const std::string& log_msg) {
+        std::cout << log_msg << std::endl;
+    }
+
+private:
+    const char* file_;
+    int line_;
+    const char* func_;
+    std::stringstream stream_;
+    LogSeverity level_;
 };
 
-#define LOG(level) LOG_ ## level
-
+#define LOG(level) LogStream(__FILE__, __LINE__, __FUNCTION__, level)
 
 #endif
+
