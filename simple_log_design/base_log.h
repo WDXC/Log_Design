@@ -9,77 +9,128 @@
 #ifndef BASE_LOG_H_
 #define BASE_LOG_H_
 
-
 #include <iostream>
-#include <fstream>
 #include <ctime>
-#include <sstream>
 
-enum LogSeverity { DEBUG, INFO, WARNING, ERROR };
 
-class LogStream {
-public:
-    LogStream(const char* file, int line, const char* func, LogSeverity severity)
-        : file_(file), line_(line), func_(func), level_(severity) {}
+#define DECLARE_VARIABLE(type, shorttype, name, tn)                     \
+  namespace fL##shorttype {                                             \
+    extern type FLAGS_##name;                      \
+  }                                                                     \
+  using fL##shorttype::FLAGS_##name
 
-    ~LogStream() {
-        std::string log_msg = formatLogMessage();
-        writeToConsole(log_msg);
+// bool specialization
+#define DECLARE_bool(name) \
+  DECLARE_VARIABLE(bool, B, name, bool)
+
+DECLARE_bool(log_utc_time);
+
+using LogSeverity = int;
+
+const int GLOG_INFO = 0, GLOG_WARNING = 1, GLOG_ERROR = 2, GLOG_FATAL = 3,
+  NUM_SEVERITIES = 4;
+
+typedef std::uint64_t int64;
+typedef double WallTime;
+
+class LogStreamBuf : public std::streambuf {
+  public:
+    LogStreamBuf(char* buf, int len) {
+      setp(buf, buf+len-2);
     }
 
-    template <typename T>
-    LogStream& operator<<(const T& value) {
-        stream_ << value;
-        return *this;
+    int_type overflow(int_type ch) {
+      return ch;
     }
 
-private:
-    std::string formatLogMessage() {
-        std::stringstream ss;
-        ss << "[" << getCurrentTime() << "] ";
-        ss << "[" << getLogLevelString() << "]";
-        ss << "[" << file_ << ":" << line_ << "] ";
-        ss << "[" << func_ << "] ";
-        ss << stream_.str();
-        return ss.str();
-    }
-
-    std::string getCurrentTime() {
-        std::time_t now = std::time(nullptr);
-        char time_str[20];
-        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-        return time_str;
-    }
-
-
-    std::string getLogLevelString() {
-      switch (level_) {
-        case LogSeverity::DEBUG:
-          return "DEBUG";
-        case LogSeverity::INFO:
-          return "INFO";
-        case LogSeverity::WARNING:
-          return "WARNING";
-        case LogSeverity::ERROR:
-          return "ERROR";
-        default:
-          return "UNKNOWN";
-      }
-    }
-
-    void writeToConsole(const std::string& log_msg) {
-        std::cout << log_msg << std::endl;
-    }
-
-private:
-    const char* file_;
-    int line_;
-    const char* func_;
-    std::stringstream stream_;
-    LogSeverity level_;
+    // Legacy effectively ignores overflow
+    size_t pcount() const { return static_cast<size_t>(pptr() - pbase()); }
+    char* pbase() const { return std::streambuf::pbase(); }
 };
 
-#define LOG(level) LogStream(__FILE__, __LINE__, __FUNCTION__, level)
+class LogSink {};
+
+
+struct LogMessageTime {
+  LogMessageTime();
+  LogMessageTime(std::tm t);
+  LogMessageTime(std::time_t timestamp, WallTime now);
+
+  const time_t& timestamp() const { return timestamp_; }
+  const int& sec() const { return time_struct_.tm_sec; }
+
+  private:
+    void init(const std::tm& t, std::time_t timestamp, WallTime now);
+    std::tm time_struct_;   // Time of creation of LogMessage
+    time_t timestamp_;
+    int32_t usecs_;
+    long int gmtoffset_;
+
+    void CalcGmtOffset();
+};
+
+
+class QLog {
+
+  public:
+    enum { kNoLogPrefix = -1 };
+
+    class LogStream : public std::ostream {
+      public:
+        LogStream(char* buf, int len, int64 ctr)
+          : std::ostream(NULL),
+            streambuf_(buf, len),
+            ctr_(ctr),
+            self_(this) {
+              rdbuf(&streambuf_);
+            }
+        int64 ctr() const { return ctr_; }
+        void set_ctr(int64 ctr) { ctr_ = ctr; }
+        LogStream* self() const { return self_; }
+        
+        // Legacy std::streambuf methods.
+        size_t pcount() const { return streambuf_.pcount(); }
+        char* pbase() const { return streambuf_.pbase(); }
+        char* str() const { return pbase(); }
+
+      private:
+        LogStream(const LogStream&);
+        LogStream& operator=(const LogStream&);
+        LogStreamBuf streambuf_;
+        int64 ctr_;
+        LogStream* self_;
+    };
+
+  public:
+    QLog(const char* file, int line);
+    ~QLog();
+
+    void Flush();
+    
+    void SendToLog();
+
+    std::ostream& stream();
+
+    const LogMessageTime& getLogMessageTime() const;
+
+  public:
+    static const size_t kMaxLogMessageLen;
+    struct LogMessageData;
+
+  private:
+    void Init(const char* file, int line, LogSeverity severity);
+
+  private:
+    static int64 num_messages_[NUM_SEVERITIES];
+
+    LogMessageData* allocated_;
+    LogMessageData* data_;
+    LogMessageTime logmsgtime_;
+
+    QLog(const QLog&);
+    void operator=(const QLog&);
+};
+
 
 #endif
 
