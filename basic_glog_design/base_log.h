@@ -13,17 +13,33 @@
 #include <ctime>
 
 
-#define DECLARE_VARIABLE(type, shorttype, name, tn)                     \
-  namespace fL##shorttype {                                             \
-    extern type FLAGS_##name;                      \
-  }                                                                     \
+#define DECLARE_VARIABLE(type, shorttype, name, tn) \
+  namespace fL##shorttype {                         \
+    extern type FLAGS_##name;           \
+  }                                                 \
+  using fL##shorttype::FLAGS_##name
+#define DEFINE_VARIABLE(type, shorttype, name, value, meaning, tn) \
+  namespace fL##shorttype {                                        \
+    type FLAGS_##name(value);                          \
+    char FLAGS_no##name;                                           \
+  }                                                                \
   using fL##shorttype::FLAGS_##name
 
 // bool specialization
 #define DECLARE_bool(name) \
   DECLARE_VARIABLE(bool, B, name, bool)
+#define DEFINE_bool(name, value, meaning) \
+  DEFINE_VARIABLE(bool, B, name, value, meaning, bool)
 
-DECLARE_bool(log_utc_time);
+#define EnvToBool(envname, dflt) \
+  (!getenv(envname) ? (dflt)     \
+                    : memchr("tTyY1\0", getenv(envname)[0], 6) != nullptr)
+
+
+#define GLOG_DEFINE_bool(name, value, meaning) \
+  DEFINE_bool(name, EnvToBool("GLOG_" #name, value), meaning)
+
+
 
 using LogSeverity = int;
 
@@ -58,6 +74,17 @@ struct LogMessageTime {
 
   const time_t& timestamp() const { return timestamp_; }
   const int& sec() const { return time_struct_.tm_sec; }
+  const int32_t& usec() const { return usecs_; }
+  const int&(min)() const { return time_struct_.tm_min; }
+  const int& hour() const { return time_struct_.tm_hour; }
+  const int& day() const { return time_struct_.tm_mday; }
+  const int& month() const { return time_struct_.tm_mon; }
+  const int& year() const { return time_struct_.tm_year; }
+  const int& dayOfWeek() const { return time_struct_.tm_wday; }
+  const int& dayInYear() const { return time_struct_.tm_yday; }
+  const int& dst() const { return time_struct_.tm_isdst; }
+  const long int& gmtoff() const { return gmtoffset_; }
+  const std::tm& tm() const { return time_struct_; }
 
   private:
     void init(const std::tm& t, std::time_t timestamp, WallTime now);
@@ -102,6 +129,8 @@ class QLog {
     };
 
   public:
+
+    typedef void (QLog::*SendMethod)();
     QLog(const char* file, int line);
     ~QLog();
 
@@ -118,7 +147,7 @@ class QLog {
     struct LogMessageData;
 
   private:
-    void Init(const char* file, int line, LogSeverity severity);
+    void Init(const char* file, int line, LogSeverity severity, void (QLog::*send_method)());
 
   private:
     static int64 num_messages_[NUM_SEVERITIES];
@@ -127,9 +156,10 @@ class QLog {
     LogMessageData* data_;
     LogMessageTime logmsgtime_;
 
-    QLog(const QLog&);
     void operator=(const QLog&);
 };
+
+#define LOG(severity) QLog(__FILE__, __LINE__).stream()
 
 
 #endif
