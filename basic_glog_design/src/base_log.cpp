@@ -1,34 +1,24 @@
-#include "base_log.h"
 #include <vector>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <syscall.h>
+#include <unistd.h>
 #include <ctime>
 #include <string.h>
 #include <iomanip>
+#include "base_log.h"
+
 
 using std::setw;
 using std::string;
 using std::setfill;
 using std::ostream;
 
-typedef std::int32_t int32;
-
-const size_t QLog::kMaxLogMessageLen = 30000;
-
-int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
-
-const char* const LogSeverityNames[NUM_SEVERITIES] = {
-  "INFO", "WARNING", "ERROR", "FATAL"
-};
-
-GLOG_DEFINE_bool(log_utc_time, false,
-    "Use UTC time for logging.");
-
-
 pid_t GetTID() {
   // On Linux and MacOSX, we try to use gettid().
-#if defined GLOG_OS_LINUX || defined GLOG_OS_MACOSX
+#if defined OS_LINUX || defined OS_MACOSX
 #ifndef __NR_gettid
-#ifdef GLOG_OS_MACOSX
+#ifdef OS_MACOSX
 #define __NR_gettid SYS_gettid
 #elif ! defined __i386__
 #error "Must define __NR_gettid for non-x86 platforms"
@@ -38,7 +28,7 @@ pid_t GetTID() {
 #endif
   static bool lacks_gettid = false;
   if (!lacks_gettid) {
-#if (defined(GLOG_OS_MACOSX) && defined(HAVE_PTHREAD_THREADID_NP))
+#if (defined(OS_MACOSX) && defined(HAVE_PTHREAD_THREADID_NP))
     uint64_t tid64;
     const int error = pthread_threadid_np(nullptr, &tid64);
     pid_t tid = error ? -1 : static_cast<pid_t>(tid64);
@@ -54,12 +44,12 @@ pid_t GetTID() {
     // the value change to "true".
     lacks_gettid = true;
   }
-#endif  // GLOG_OS_LINUX || GLOG_OS_MACOSX
+#endif  // OS_LINUX || OS_MACOSX
 
   // If gettid() could not be used, we use one of the following.
-#if defined GLOG_OS_LINUX
+#if defined OS_LINUX
   return getpid();  // Linux:  getpid returns thread ID when gettid is absent
-#elif defined GLOG_OS_WINDOWS && !defined GLOG_OS_CYGWIN
+#elif defined OS_WINDOWS && !defined OS_CYGWIN
   return static_cast<pid_t>(GetCurrentThreadId());
 #elif defined(HAVE_PTHREAD)
   // If none of the techniques above worked, we use pthread_self().
@@ -71,11 +61,17 @@ pid_t GetTID() {
 
 
 
+const size_t QLog::kMaxLogMessageLen = 30000;
+
+int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
+
+GLOG_DEFINE_bool(log_utc_time, false,
+    "Use UTC time for logging.");
+
 static void ColoredWriteToStderrOrStdout(FILE* output, LogSeverity severity,
     const char* message, size_t len) {
   bool is_stdout = (output == stdout);
     fwrite(message, len, 1, output);
-    int m = 2;
 }
 
 static void ColoredWriteToStderr(LogSeverity severity, const char* message,
@@ -99,12 +95,9 @@ WallTime WallTime_Now() {
 
 const char* const_basename(const char* filepath) {
   const char* base = strrchr(filepath, '/');
-#ifdef GLOG_OS_WINDOWS  // Look for either path separator in Windows
-  if (!base)
-    base = strrchr(filepath, '\\');
-#endif
   return base ? (base+1) : filepath;
 }
+
 
 struct QLog::LogMessageData {
   LogMessageData();
@@ -131,6 +124,7 @@ struct QLog::LogMessageData {
     LogMessageData(const LogMessageData&) = delete;
     void operator=(const LogMessageData&) = delete;
 };
+
 
 LogMessageTime::LogMessageTime() 
   : time_struct_(), timestamp_(0), usecs_(0), gmtoffset_(0) {}

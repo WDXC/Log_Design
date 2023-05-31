@@ -9,45 +9,10 @@
 #ifndef BASE_LOG_H_
 #define BASE_LOG_H_
 
-#include <iostream>
+
 #include <ctime>
+#include "Type.h"
 
-
-#define DECLARE_VARIABLE(type, shorttype, name, tn) \
-  namespace fL##shorttype {                         \
-    extern type FLAGS_##name;           \
-  }                                                 \
-  using fL##shorttype::FLAGS_##name
-#define DEFINE_VARIABLE(type, shorttype, name, value, meaning, tn) \
-  namespace fL##shorttype {                                        \
-    type FLAGS_##name(value);                          \
-    char FLAGS_no##name;                                           \
-  }                                                                \
-  using fL##shorttype::FLAGS_##name
-
-// bool specialization
-#define DECLARE_bool(name) \
-  DECLARE_VARIABLE(bool, B, name, bool)
-#define DEFINE_bool(name, value, meaning) \
-  DEFINE_VARIABLE(bool, B, name, value, meaning, bool)
-
-#define EnvToBool(envname, dflt) \
-  (!getenv(envname) ? (dflt)     \
-                    : memchr("tTyY1\0", getenv(envname)[0], 6) != nullptr)
-
-
-#define GLOG_DEFINE_bool(name, value, meaning) \
-  DEFINE_bool(name, EnvToBool("GLOG_" #name, value), meaning)
-
-
-
-using LogSeverity = int;
-
-const int GLOG_INFO = 0, GLOG_WARNING = 1, GLOG_ERROR = 2, GLOG_FATAL = 3,
-  NUM_SEVERITIES = 4;
-
-typedef std::uint64_t int64;
-typedef double WallTime;
 
 class LogStreamBuf : public std::streambuf {
   public:
@@ -64,7 +29,28 @@ class LogStreamBuf : public std::streambuf {
     char* pbase() const { return std::streambuf::pbase(); }
 };
 
-class LogSink {};
+class LogSink {
+// If a non-NULL sink pointer is given, we push this message to that sink
+// For LOG_TO_SINK we then do normal LOG(severity) logging as well.
+// This is useful for capturing messages and passing/storing them
+// somewhere more specific than the global log of the process.
+// Argument types:
+//  Logsinks* sink;
+//  LogSeverity severity;
+// The cast is to disambiguate NULL arguments
+
+#define LOG_TO_SINK(sink, severity) \
+  @ac_google_namespace@::LogMessage(                                    \
+      __FILE__, __LINE__,                                               \
+      @ac_google_namespace@::GLOG_ ## severity,                         \
+      static_cast<@ac_google_namespace@::LogSink*>(sink), true).stream()
+#define LOG_TO_SINK_BUT_NOT_TO_LOGFILE(sink, severity)                  \
+  @ac_google_namespace@::LogMessage(                                    \
+      __FILE__, __LINE__,                                               \
+      @ac_google_namespace@::GLOG_ ## severity,                         \
+      static_cast<@ac_google_namespace@::LogSink*>(sink), false).stream()
+
+};
 
 
 struct LogMessageTime {
@@ -72,10 +58,22 @@ struct LogMessageTime {
   LogMessageTime(std::tm t);
   LogMessageTime(std::time_t timestamp, WallTime now);
 
+//  struct tm {
+//      int tm_sec;    /* Seconds (0-60) */
+//      int tm_min;    /* Minutes (0-59) */
+//      int tm_hour;   /* Hours (0-23) */
+//      int tm_mday;   /* Day of the month (1-31) */
+//      int tm_mon;    /* Month (0-11) */
+//      int tm_year;   /* Year - 1900 */
+//      int tm_wday;   /* Day of the week (0-6, Sunday = 0) */
+//      int tm_yday;   /* Day in the year (0-365, 1 Jan = 0) */
+//      int tm_isdst;  /* Daylight saving time */
+//  };
+
   const time_t& timestamp() const { return timestamp_; }
   const int& sec() const { return time_struct_.tm_sec; }
   const int32_t& usec() const { return usecs_; }
-  const int&(min)() const { return time_struct_.tm_min; }
+  const int& min() const { return time_struct_.tm_min; }
   const int& hour() const { return time_struct_.tm_hour; }
   const int& day() const { return time_struct_.tm_mday; }
   const int& month() const { return time_struct_.tm_mon; }
@@ -159,8 +157,8 @@ class QLog {
     void operator=(const QLog&);
 };
 
-#define LOG(severity) QLog(__FILE__, __LINE__).stream()
 
+#define LOG(severity) QLog(__FILE__, __LINE__).stream()
 
 #endif
 

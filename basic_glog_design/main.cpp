@@ -7,8 +7,8 @@ using std::endl;
 int main() {
   int a = 0;
   int b = 2;
-  LOG(INFO) << "234jklrjksldjfsdl";
-  cout << "asdf" << endl;
+  LOG(INFO) << "234jklrjksldjfsdl" << endl ;
+  LOG(ERROR) << "asdfalskdfjweorjewo" << "\n";
 
   return 0;
 }
