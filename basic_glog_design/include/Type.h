@@ -5,16 +5,27 @@
 
 using LogSeverity = int;
 
-typedef std::uint64_t int64;
 typedef std::int32_t int32;
-typedef double WallTime;
+typedef std::uint32_t uint32;
+typedef std::int64_t int64;
+typedef std::uint64_t uint64;
 
+typedef double WallTime;
 
 const int GLOG_INFO = 0, GLOG_WARNING = 1, GLOG_ERROR = 2, GLOG_FATAL = 3,
   NUM_SEVERITIES = 4;
 
 const char* const LogSeverityNames[NUM_SEVERITIES] = {
   "INFO", "WARNING", "ERROR", "FATAL"
+};
+
+static const char* g_program_invocation_short_name = nullptr;
+
+enum GLogColor {
+    COLOR_DEFAULT,
+    COLOR_RED,
+    COLOR_GREEN,
+    COLOR_YELLOW
 };
 
 
@@ -41,7 +52,6 @@ const char* const LogSeverityNames[NUM_SEVERITIES] = {
 // TODO(hamaji): Add other platforms.
 #error Platform not supported by glog. Please consider to contribute platform information by submitting a pull request on Github.
 #endif
-
 
 
 #define DECLARE_VARIABLE(type, shorttype, name, tn) \
