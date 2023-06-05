@@ -4,6 +4,7 @@
 #include <ctime>
 #include <iomanip>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -68,8 +69,18 @@ int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
 
 GLOG_DEFINE_bool(log_utc_time, false, "Use UTC time for logging.");
 
+GLOG_DEFINE_bool(timestamp_in_logfile_name,
+                 BoolFromEnv("GOOGLE_TIMESTAMP_IN_LOGFILE_NAME", true),
+                 "put a timestamp at the end of the log file name");
+
+
 GLOG_DEFINE_bool(alsologtostderr, BoolFromEnv("GOOGLE_ALSOLOGTOSTDERR", false),
                  "log messages go to stderr in addition to logfiles");
+GLOG_DEFINE_bool(logtostderr, BoolFromEnv("GOOGLE_LOGTOSTDERR", false),
+                 "log messages go to stderr instead of logfiles");
+
+GLOG_DEFINE_bool(logtostdout, BoolFromEnv("GOOGLE_LOGTOSTDOUT", false),
+                 "log messages go to stdout instead of logfiles");
 
 GLOG_DEFINE_int32(logbuflevel, 0,
                   "Buffer log message for at most this many seconds"
@@ -79,6 +90,8 @@ GLOG_DEFINE_int32(logemaillevel, 999,
                   "Email log messages logged at this level or higher"
                   " (0 means email all; 3 means email FATAL only;"
                   " ...)");
+GLOG_DEFINE_int32(logfile_mode, 0664, "Log file mode/permissions.");
+
 DEFINE_int32(stderrthreshold, GLOG_ERROR,
              "log messages at or above this level are copied to stderr in "
              "addition to logfiles. This flag obsoletes --alsologtostderr.");
@@ -87,10 +100,39 @@ GLOG_DEFINE_string(alsologtoemail, "",
                    "log messages go to these email addresses "
                    "in addition to logfiles");
 
+GLOG_DEFINE_uint32(max_log_size, 1800,
+                   "approx. maximum log file size (in MB). A value of 0 will "
+                   "be silently overridden to 1.");
+
+enum {PATH_SEPARATOR = '/'};
+
 static void ColoredWriteToStderrOrStdout(FILE *output, LogSeverity severity,
                                          const char *message, size_t len) {
   bool is_stdout = (output == stdout);
   fwrite(message, len, 1, output);
+}
+
+static uint32 MaxLogSize() {
+  return (FLAGS_max_log_size > 0 && FLAGS_max_log_size < 4096
+              ? FLAGS_max_log_size
+              : 1);
+}
+
+const string MyUserName() {
+    string name = getenv("USER");
+    return name;
+}
+
+static void ColoredWriteToStdout(LogSeverity severity, const char *message,
+                                 size_t len) {
+  FILE *output = stdout;
+  // We also need to send logs to the stderr when the severity is
+  // higher or equal to the stderr threshold
+  if (severity >= FLAGS_stderrthreshold) {
+    output = stderr;
+  }
+
+  ColoredWriteToStderrOrStdout(output, severity, message, len);
 }
 
 static void ColoredWriteToStderr(LogSeverity severity, const char *message,
@@ -377,10 +419,9 @@ static void GetHostName(string *hostname) {
 #endif
 }
 
-static bool SendEmailInternal(const char* dest, const char* subject,
-        const char* body, bool use_logging) {
-    
-}
+static bool SendEmailInternal(const char *dest, const char *subject,
+                              const char *body, bool use_logging) {}
+
 
 void InitInvocationName(const char *argv0) {
   const char *slash = strchr(argv0, '/');
@@ -522,34 +563,95 @@ inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
 }
 
 inline void LogDestination::MaybeLogToEmail(LogSeverity severity,
-        const char *message, size_t len) {
-    if (severity >= email_logging_severity_ ||
-            severity >= FLAGS_logemaillevel) {
-        string to(FLAGS_alsologtoemail);
-        if (!addresses_.empty()) {
-            if (!to.empty()) {
-                to += ",";
-            }
-            to += addresses_;
-        }
-        const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " + 
-                             ProgramInvocationShortName());
-        string body(hostname());
-        body += "\n\n";
-        body.append(message, len);
-    
-        // should NOT use SendEmail(). The caller of this function holds the
-        // log_mutex and SendEmail() calls LOG/VLOG which will block trying to 
-        // acquire the log_mutex object. Use SendEmailInternal() and set use_logging
-        // to false
-        SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
+                                            const char *message, size_t len) {
+  if (severity >= email_logging_severity_ || severity >= FLAGS_logemaillevel) {
+    string to(FLAGS_alsologtoemail);
+    if (!addresses_.empty()) {
+      if (!to.empty()) {
+        to += ",";
+      }
+      to += addresses_;
     }
+    const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " +
+                         ProgramInvocationShortName());
+    string body(hostname());
+    body += "\n\n";
+    body.append(message, len);
+
+    // should NOT use SendEmail(). The caller of this function holds the
+    // log_mutex and SendEmail() calls LOG/VLOG which will block trying to
+    // acquire the log_mutex object. Use SendEmailInternal() and set use_logging
+    // to false
+    SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
+  }
 }
 
 inline void LogDestination::MaybeLogToLogfile(LogSeverity severity,
                                               time_t timestamp,
                                               const char *message, size_t len) {
   const bool should_flush = severity > FLAGS_logbuflevel;
+  LogDestination *destination = log_destination(severity);
+  destination->logger_->Write(should_flush, timestamp, message, len);
+}
+
+inline void LogDestination::LogToAllLogfiles(LogSeverity severity,
+                                             time_t timestamp,
+                                             const char *message, size_t len) {
+  if (FLAGS_logtostdout) {
+    ColoredWriteToStdout(severity, message, len);
+  } else if (FLAGS_logtostderr) {
+    ColoredWriteToStderr(severity, message, len);
+  } else {
+    for (int i = severity; i >= 0; --i) {
+      LogDestination::MaybeLogToLogfile(i, timestamp, message, len);
+    }
+  }
+}
+
+inline void LogDestination::LogToSinks(LogSeverity severity,
+                                       const char *full_filename,
+                                       const char *base_filename, int line,
+                                       const LogMessageTime &logmsgtime,
+                                       const char *message,
+                                       size_t message_len) {
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0;) {
+      (*sinks_)[i]->send(severity, full_filename, base_filename, line,
+                         logmsgtime, message, message_len);
+    }
+  }
+}
+
+inline void LogDestination::WaitForSinks(QLog::LogMessageData *data) {
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0;) {
+      (*sinks_)[i]->WaitTillSent();
+    }
+  }
+
+  const bool send_to_sink = true;
+  if (send_to_sink && data->sink_ != nullptr) {
+    data->sink_->WaitTillSent();
+  }
+}
+
+LogDestination *LogDestination::log_destinations_[NUM_SEVERITIES];
+
+inline LogDestination *LogDestination::log_destination(LogSeverity severity) {
+  assert(severity >= 0 && severity < NUM_SEVERITIES);
+  if (!log_destinations_[severity]) {
+    log_destinations_[severity] = new LogDestination(severity, nullptr);
+  }
+  return log_destinations_[severity];
+}
+
+void LogDestination::DeleteLogDestinations() {
+  for (auto &log_destination : log_destinations_) {
+    delete log_destination;
+    log_destination = nullptr;
+  }
+  delete sinks_;
+  sinks_ = nullptr;
 }
 
 LogFileObject::LogFileObject(LogSeverity severity, const char *base_filename)
@@ -569,9 +671,141 @@ LogFileObject::~LogFileObject() {
   }
 }
 
+void LogFileObject::SetBasename(const char *basename) {
+  base_filename_selected_ = true;
+}
+
+bool LogFileObject::CreateLogfile(const string& time_pid_string) {
+    string string_filename = base_filename_;
+    if (FLAGS_timestamp_in_logfile_name) {
+        string_filename += time_pid_string;
+    }
+
+    string_filename += filename_extension_;
+    const char* filename = string_filename.c_str();
+
+    // only write to files, create if non-existant
+    int flags = O_WRONLY | O_CREAT;
+    if (FLAGS_timestamp_in_logfile_name) {
+        flags = flags | O_EXCL;
+    }
+    int fd = open(filename, flags, static_cast<mode_t>(FLAGS_logfile_mode));
+    if (fd == -1) return false;
+
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+    // flock is file lock
+    static struct flock w_lock;
+
+    w_lock.l_type = F_WRLCK;
+    w_lock.l_start = 0;
+    w_lock.l_whence = SEEK_SET;
+    w_lock.l_len = 0;
+
+    int wlock_ret = fcntl(fd, F_SETLK, &w_lock);
+    if (wlock_ret == -1) {
+        close(fd);
+        return false;
+    }
+
+    file_ = fdopen(fd, "a");
+    if (file_ == nullptr) {
+      close(fd);
+      if (FLAGS_timestamp_in_logfile_name) {
+      unlink(filename);  // Erase the half-baked evidence: an unusable log file, only if we just created it.
+    }
+
+      if (!symlink_basename_.empty()) {
+          const char* slash = strrchr(filename, PATH_SEPARATOR);
+          const string linkname = 
+              symlink_basename_ + '.' + LogSeverityNames[severity_];
+          string linkpath;
+          if (slash) linkpath = string(filename, static_cast<size_t>(slash-filename+1));
+          linkpath += linkname;
+          unlink(linkpath.c_str());
+
+          const char* linkdest = slash ? (slash + 1) : filename;
+          if (symlink(linkdest, linkpath.c_str()) != 0) {
+          }
+
+          if (!FLAGS_log_link.empty()) {
+              linkpath = FLAGS_log_link + "/" + linkname;
+              unlink(linkpath.c_str());
+              if (symlink(filename, linkpath.c_str()) != 0) {
+
+              }
+          }
+      }
+      return true;
+}
+
 void LogFileObject::Write(bool force_flush, time_t timestamp,
                           const char *message, size_t message_len) {
-  return;
+  if (base_filename_selected_ && base_filename_.empty()) {
+    return;
+  }
+
+  if (file_length_ >> 20U >= MaxLogSize()) {
+    if (file_ != nullptr)
+      fclose(file_);
+    file_ = nullptr;
+    file_length_ = bytes_since_flush_ = dropped_mem_length_ = 0;
+    rollover_attempt_ = kRolloverAttemptFrequency - 1;
+  }
+
+  if (file_ == nullptr) {
+    if (++rollover_attempt_ != kRolloverAttemptFrequency)
+      return;
+    rollover_attempt_ = 0;
+    struct ::tm tm_time;
+    if (FLAGS_log_utc_time) {
+      gmtime_r(&timestamp, &tm_time);
+    } else {
+      localtime_r(&timestamp, &tm_time);
+    }
+
+    // the logfile's filename will have the date/time & pid in it
+    std::ostringstream time_pid_stream;
+    time_pid_stream.fill('0');
+    time_pid_stream << 1900 + tm_time.tm_year << setw(2) << 1 + tm_time.tm_mon
+                    << setw(2) << tm_time.tm_mday << '-' << setw(2)
+                    << tm_time.tm_hour << setw(2) << tm_time.tm_min << setw(2)
+                    << tm_time.tm_sec << '.';
+
+    const string &time_pid_string = time_pid_stream.str();
+
+    if (base_filename_selected_) {
+      if (!CreateLogfile(time_pid_string)) {
+        perror("Could not create log file");
+        fprintf(stderr, "COULD NOT CREATE LOGFILE '%S'!\n",
+                time_pid_string.c_str());
+        return;
+      }
+    } else {
+        string stripped_filename(
+                ProgramInvocationShortName());
+        string hostname;
+        GetHostName(&hostname);
+
+        string uidname = MyUserName();
+        if (uidname.empty()) uidname = "invalid-user";
+
+        stripped_filename = stripped_filename+'.'+hostname+'.'
+            +uidname+".log."
+            +LogSeverityNames[severity_]+'.';
+        const vector<string>& log_dirs = GetLoggingDirectories();
+
+        bool success = false;
+
+        for (const auto& log_dir : log_dirs) {
+            base_filename_ = log_dir + "/" + stripped_filename;
+            if (CreateLogfile(time_pid_string)) {
+                success = true;
+                break;
+            }
+        }
+    }
+  }
 }
 
 void LogFileObject::Flush() { FlushUnlocked(); }

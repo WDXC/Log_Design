@@ -1,3 +1,0 @@
-/root/mine/project/Log_Design/basic_glog_design/build/CMakeFiles/rebuild_cache.dir
-/root/mine/project/Log_Design/basic_glog_design/build/CMakeFiles/edit_cache.dir
-/root/mine/project/Log_Design/basic_glog_design/build/CMakeFiles/basic.dir

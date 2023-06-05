@@ -99,6 +99,8 @@ enum GLogColor {
 #define EnvToString(envname, dflt) \
     (!getenv(envname) ? (dflt) : getenv(envname))
 
+#define EnvToUInt(envname, dflt) \
+    (!getenv(envname) ? (dflt) : strtoul(getenv(envname), nullptr, 10))
 // int32 specialization
 #define DECLARE_int32(name) \
   DECLARE_VARIABLE(int32, I, name, int32)
@@ -114,6 +116,18 @@ enum GLogColor {
 
 #define GLOG_DEFINE_string(name, value, meaning)  \
     DEFINE_string(name, EnvToString("GLOG_" #name, value), meaning)
+
+// uint32 specialization
+#ifndef DECLARE_uint32
+#define DECLARE_uint32(name) \
+  DECLARE_VARIABLE(uint32, U, name, uint32)
+#endif // DECLARE_uint64
+#define DEFINE_uint32(name, value, meaning) \
+  DEFINE_VARIABLE(uint32, U, name, value, meaning, uint32)
+
+#define GLOG_DEFINE_uint32(name, value, meaning) \
+  DEFINE_uint32(name, EnvToUInt("GLOG_" #name, value), meaning)
+
 
 pid_t GetTID();
 
