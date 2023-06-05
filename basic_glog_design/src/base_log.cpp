@@ -68,6 +68,25 @@ int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
 
 GLOG_DEFINE_bool(log_utc_time, false, "Use UTC time for logging.");
 
+GLOG_DEFINE_bool(alsologtostderr, BoolFromEnv("GOOGLE_ALSOLOGTOSTDERR", false),
+                 "log messages go to stderr in addition to logfiles");
+
+GLOG_DEFINE_int32(logbuflevel, 0,
+                  "Buffer log message for at most this many seconds"
+                  " (-1 means don't buffer; 0 means buffer INFO only;"
+                  " ...)");
+GLOG_DEFINE_int32(logemaillevel, 999,
+                  "Email log messages logged at this level or higher"
+                  " (0 means email all; 3 means email FATAL only;"
+                  " ...)");
+DEFINE_int32(stderrthreshold, GLOG_ERROR,
+             "log messages at or above this level are copied to stderr in "
+             "addition to logfiles. This flag obsoletes --alsologtostderr.");
+
+GLOG_DEFINE_string(alsologtoemail, "",
+                   "log messages go to these email addresses "
+                   "in addition to logfiles");
+
 static void ColoredWriteToStderrOrStdout(FILE *output, LogSeverity severity,
                                          const char *message, size_t len) {
   bool is_stdout = (output == stdout);
@@ -358,6 +377,11 @@ static void GetHostName(string *hostname) {
 #endif
 }
 
+static bool SendEmailInternal(const char* dest, const char* subject,
+        const char* body, bool use_logging) {
+    
+}
+
 void InitInvocationName(const char *argv0) {
   const char *slash = strchr(argv0, '/');
   g_program_invocation_short_name = slash ? slash + 1 : argv0;
@@ -486,6 +510,48 @@ inline void LogDestination::SetEmailLogging(LogSeverity min_severity,
   LogDestination::addresses_ = addresses;
 }
 
+inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
+                                             const char *message,
+                                             size_t message_len,
+                                             size_t prefix_len) {
+
+  if ((severity >= FLAGS_stderrthreshold) || FLAGS_alsologtostderr) {
+    ColoredWriteToStderr(severity, message, message_len);
+    (void)prefix_len;
+  }
+}
+
+inline void LogDestination::MaybeLogToEmail(LogSeverity severity,
+        const char *message, size_t len) {
+    if (severity >= email_logging_severity_ ||
+            severity >= FLAGS_logemaillevel) {
+        string to(FLAGS_alsologtoemail);
+        if (!addresses_.empty()) {
+            if (!to.empty()) {
+                to += ",";
+            }
+            to += addresses_;
+        }
+        const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " + 
+                             ProgramInvocationShortName());
+        string body(hostname());
+        body += "\n\n";
+        body.append(message, len);
+    
+        // should NOT use SendEmail(). The caller of this function holds the
+        // log_mutex and SendEmail() calls LOG/VLOG which will block trying to 
+        // acquire the log_mutex object. Use SendEmailInternal() and set use_logging
+        // to false
+        SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
+    }
+}
+
+inline void LogDestination::MaybeLogToLogfile(LogSeverity severity,
+                                              time_t timestamp,
+                                              const char *message, size_t len) {
+  const bool should_flush = severity > FLAGS_logbuflevel;
+}
+
 LogFileObject::LogFileObject(LogSeverity severity, const char *base_filename)
     : base_filename_selected_(base_filename != nullptr),
       base_filename_((base_filename != nullptr) ? base_filename : ""),
@@ -503,25 +569,20 @@ LogFileObject::~LogFileObject() {
   }
 }
 
-void LogFileObject::Write(bool force_flush,
-                          time_t timestamp,
-                          const char* message,
-                          size_t message_len) {
-    return;
+void LogFileObject::Write(bool force_flush, time_t timestamp,
+                          const char *message, size_t message_len) {
+  return;
 }
 
-void LogFileObject::Flush() {
-    FlushUnlocked();
-}
+void LogFileObject::Flush() { FlushUnlocked(); }
 
 void LogFileObject::FlushUnlocked() {
-    if (file_ != nullptr) {
-        fflush(file_);
-        bytes_since_flush_ = 0;
-    }
-    return;
+  if (file_ != nullptr) {
+    fflush(file_);
+    bytes_since_flush_ = 0;
+  }
+  return;
 }
-
 
 LogMessageTime::LogMessageTime()
     : time_struct_(), timestamp_(0), usecs_(0), gmtoffset_(0) {}

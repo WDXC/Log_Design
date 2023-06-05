@@ -2,6 +2,7 @@
 #define _TYPE_H_
 
 #include <iostream>
+#include <string.h>
 
 using LogSeverity = int;
 
@@ -20,6 +21,14 @@ const char* const LogSeverityNames[NUM_SEVERITIES] = {
 };
 
 static const char* g_program_invocation_short_name = nullptr;
+
+static bool BoolFromEnv(const char* varname, bool defval) {
+    const char* const valstr = getenv(varname);
+    if (!valstr) {
+        return defval;
+    }
+    return memchr("tTyY1\0", valstr[0], 6) != nullptr;
+}
 
 enum GLogColor {
     COLOR_DEFAULT,
@@ -66,6 +75,14 @@ enum GLogColor {
   }                                                                \
   using fL##shorttype::FLAGS_##name
 
+#define DEFINE_string(name, value, meaning)                   \
+  namespace fLS {                                             \
+  std::string FLAGS_##name##_buf(value);                      \
+  std::string& FLAGS_##name = FLAGS_##name##_buf; \
+  char FLAGS_no##name;                                        \
+  }                                                           \
+  using fLS::FLAGS_##name
+
 // bool specialization
 #define DECLARE_bool(name) \
   DECLARE_VARIABLE(bool, B, name, bool)
@@ -76,9 +93,27 @@ enum GLogColor {
   (!getenv(envname) ? (dflt)     \
                     : memchr("tTyY1\0", getenv(envname)[0], 6) != nullptr)
 
+#define EnvToInt(envname, dflt) \
+  (!getenv(envname) ? (dflt) : strtol(getenv(envname), nullptr, 10))
+
+#define EnvToString(envname, dflt) \
+    (!getenv(envname) ? (dflt) : getenv(envname))
+
+// int32 specialization
+#define DECLARE_int32(name) \
+  DECLARE_VARIABLE(int32, I, name, int32)
+#define DEFINE_int32(name, value, meaning) \
+  DEFINE_VARIABLE(int32, I, name, value, meaning, int32)
+
 
 #define GLOG_DEFINE_bool(name, value, meaning) \
   DEFINE_bool(name, EnvToBool("GLOG_" #name, value), meaning)
+
+#define GLOG_DEFINE_int32(name, value, meaning) \
+  DEFINE_int32(name, EnvToInt("GLOG_" #name, value), meaning)
+
+#define GLOG_DEFINE_string(name, value, meaning)  \
+    DEFINE_string(name, EnvToString("GLOG_" #name, value), meaning)
 
 pid_t GetTID();
 
