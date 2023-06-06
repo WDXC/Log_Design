@@ -459,25 +459,25 @@ static bool TerminalSupportsColor() {
 }
 
 static void GetHostName(string *hostname) {
-#if defined(HAVE_SYS_UTSNAME_H)
+//#if defined(HAVE_SYS_UTSNAME_H)
   struct utsname buf;
   if (uname(&buf) < 0) {
     // ensure null termination on failure
     *buf.nodename = '\0';
   }
   *hostname = buf.nodename;
-#elif defined(OS_WINDOWS)
-  char buf[MAX_COMPUTERNAME_LENGTH + 1];
-  DWORD len = MAX_COMPUTERNAME_LENGTH + 1;
-  if (GetComputerNameA(buf, &len)) {
-    *hostname = buf;
-  } else {
-    hostname->clear();
-  }
-#else
-#warning There is no way to retrieve the host name.
-  *hostname = "(unknown)";
-#endif
+//#elif defined(OS_WINDOWS)
+//  char buf[MAX_COMPUTERNAME_LENGTH + 1];
+//  DWORD len = MAX_COMPUTERNAME_LENGTH + 1;
+//  if (GetComputerNameA(buf, &len)) {
+//    *hostname = buf;
+//  } else {
+//    hostname->clear();
+//  }
+//#else
+//#warning There is no way to retrieve the host name.
+//  *hostname = "(unknown)";
+//#endif
 }
 
 static bool SendEmailInternal(const char *dest, const char *subject,
