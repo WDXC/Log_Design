@@ -131,4 +131,7 @@ enum GLogColor {
 
 pid_t GetTID();
 
+
+void InitInvocationName(const char *argv0);
+
 #endif

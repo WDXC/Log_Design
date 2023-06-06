@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/basic.dir/main.cpp.o CMakeFiles/basic.dir/src/base_log.cpp.o  -o basic 

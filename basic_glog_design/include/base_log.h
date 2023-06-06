@@ -243,6 +243,7 @@ void TruncateStdoutStderr();
 // Thread-safe
 const char* GetLogSeverityName(LogSeverity severity);
 
+
 #define LOG(severity) QLog(__FILE__, __LINE__).stream()
 
 #endif

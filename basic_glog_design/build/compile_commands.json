@@ -1,0 +1,12 @@
+[
+{
+  "directory": "/root/mine/project/Log_Design/basic_glog_design/build",
+  "command": "/usr/bin/c++   -I/root/mine/project/Log_Design/basic_glog_design/include    -o CMakeFiles/basic.dir/main.cpp.o -c /root/mine/project/Log_Design/basic_glog_design/main.cpp",
+  "file": "/root/mine/project/Log_Design/basic_glog_design/main.cpp"
+},
+{
+  "directory": "/root/mine/project/Log_Design/basic_glog_design/build",
+  "command": "/usr/bin/c++   -I/root/mine/project/Log_Design/basic_glog_design/include    -o CMakeFiles/basic.dir/src/base_log.cpp.o -c /root/mine/project/Log_Design/basic_glog_design/src/base_log.cpp",
+  "file": "/root/mine/project/Log_Design/basic_glog_design/src/base_log.cpp"
+}
+]
