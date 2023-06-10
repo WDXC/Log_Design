@@ -21,6 +21,117 @@ using std::setw;
 using std::string;
 using std::vector;
 
+
+
+std::string g_application_fingerprint;
+
+static bool stop_writing = false;
+
+enum { PATH_SEPARATOR = '/' };
+
+int64 UsecToCycles(int64 usec) { return usec; }
+
+const char possible_dir_delim[] = {'/'};
+
+const size_t QLog::kMaxLogMessageLen = 30000;
+
+int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
+
+Logger::~Logger() = default;
+
+static const char *DefaultLogDir() {
+  const char *env;
+  env = getenv("GOOGLE_LOG_DIR");
+  if (env != nullptr && env[0] != '\0') {
+    return env;
+  }
+  env = getenv("TEST_TMPDIR");
+  if (env != nullptr && env[0] != '\0') {
+    return env;
+  }
+  return "";
+}
+
+
+GLOG_DEFINE_bool(log_utc_time, false, "Use UTC time for logging.");
+
+GLOG_DEFINE_bool(
+    drop_log_memory, true,
+    "Drop in-memory buffers of log contents. "
+    "Logs can grow very quickly and they are rarely read before they "
+    "need to be evicted from memory. Instead, drop them from memory "
+    "as soon as they are flushed to disk.");
+
+GLOG_DEFINE_bool(log_file_header, true,
+                 "Write the file header at the start of each log file");
+
+GLOG_DEFINE_bool(stop_logging_if_full_disk, false,
+                 "Stop attempting to log to disk if the disk if full");
+
+GLOG_DEFINE_bool(timestamp_in_logfile_name,
+                 BoolFromEnv("GOOGLE_TIMESTAMP_IN_LOGFILE_NAME", true),
+                 "put a timestamp at the end of the log file name");
+
+GLOG_DEFINE_bool(log_year_in_prefix, true,
+                 "Include the year in the log prefix");
+
+GLOG_DEFINE_bool(alsologtostderr, BoolFromEnv("GOOGLE_ALSOLOGTOSTDERR", false),
+                 "log messages go to stderr in addition to logfiles");
+GLOG_DEFINE_bool(logtostderr, BoolFromEnv("GOOGLE_LOGTOSTDERR", false),
+                 "log messages go to stderr instead of logfiles");
+
+GLOG_DEFINE_bool(logtostdout, BoolFromEnv("GOOGLE_LOGTOSTDOUT", false),
+                 "log messages go to stdout instead of logfiles");
+
+GLOG_DEFINE_int32(logcleansecs, 60 * 5, // every 5 minutes
+                  "Clean overdue logs every this many second");
+
+GLOG_DEFINE_int32(logbuflevel, 0,
+                  "Buffer log message for at most this many seconds"
+                  " (-1 means don't buffer; 0 means buffer INFO only;"
+                  " ...)");
+GLOG_DEFINE_int32(logemaillevel, 999,
+                  "Email log messages logged at this level or higher"
+                  " (0 means email all; 3 means email FATAL only;"
+                  " ...)");
+GLOG_DEFINE_int32(logfile_mode, 0664, "Log file mode/permissions.");
+
+GLOG_DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this."
+" Overridable by --vmodule.");
+
+
+DEFINE_int32(stderrthreshold, GLOG_ERROR,
+             "log messages at or above this level are copied to stderr in "
+             "addition to logfiles. This flag obsoletes --alsologtostderr.");
+
+GLOG_DEFINE_string(alsologtoemail, "",
+                   "log messages go to these email addresses "
+                   "in addition to logfiles");
+
+GLOG_DEFINE_string(
+    log_dir, DefaultLogDir(),
+    "If specified, logfiles are written into this directory instead "
+    "of the default logging directory");
+GLOG_DEFINE_string(log_link, "",
+                   "Put additional links to the log "
+                   "files in this directory");
+
+GLOG_DEFINE_uint32(max_log_size, 1800,
+                   "approx. maximum log file size (in MB). A value of 0 will "
+                   "be silently overridden to 1.");
+
+
+string PrettyDuration(int secs) {
+  std::stringstream result;
+  int mins = secs / 60;
+  int hours = mins / 60;
+  mins = mins % 60;
+  secs = secs % 60;
+  result.fill('0');
+  result << hours << ':' << setw(2) << mins << ':' << setw(2) << secs;
+  return result.str();
+}
+
 pid_t GetTID() {
   // On Linux and MacOSX, we try to use gettid().
 #if defined OS_LINUX || defined OS_MACOSX
@@ -66,109 +177,8 @@ pid_t GetTID() {
 #endif
 }
 
-std::string g_application_fingerprint;
-static bool stop_writing = false;
-
-int64 UsecToCycles(int64 usec) { return usec; }
-
-const char possible_dir_delim[] = {'/'};
-
-const size_t QLog::kMaxLogMessageLen = 30000;
-
-static const char *DefaultLogDir() {
-  const char *env;
-  env = getenv("GOOGLE_LOG_DIR");
-  if (env != nullptr && env[0] != '\0') {
-    return env;
-  }
-  env = getenv("TEST_TMPDIR");
-  if (env != nullptr && env[0] != '\0') {
-    return env;
-  }
-  return "";
-}
-
-int64 QLog::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
-
-GLOG_DEFINE_bool(log_utc_time, false, "Use UTC time for logging.");
-
-GLOG_DEFINE_bool(
-    drop_log_memory, true,
-    "Drop in-memory buffers of log contents. "
-    "Logs can grow very quickly and they are rarely read before they "
-    "need to be evicted from memory. Instead, drop them from memory "
-    "as soon as they are flushed to disk.");
-
-GLOG_DEFINE_bool(log_file_header, true,
-                 "Write the file header at the start of each log file");
-
-GLOG_DEFINE_bool(stop_logging_if_full_disk, false,
-                 "Stop attempting to log to disk if the disk if full");
-
-GLOG_DEFINE_bool(timestamp_in_logfile_name,
-                 BoolFromEnv("GOOGLE_TIMESTAMP_IN_LOGFILE_NAME", true),
-                 "put a timestamp at the end of the log file name");
-
-GLOG_DEFINE_bool(log_year_in_prefix, true,
-                 "Include the year in the log prefix");
-
-GLOG_DEFINE_bool(alsologtostderr, BoolFromEnv("GOOGLE_ALSOLOGTOSTDERR", false),
-                 "log messages go to stderr in addition to logfiles");
-GLOG_DEFINE_bool(logtostderr, BoolFromEnv("GOOGLE_LOGTOSTDERR", false),
-                 "log messages go to stderr instead of logfiles");
-
-GLOG_DEFINE_bool(logtostdout, BoolFromEnv("GOOGLE_LOGTOSTDOUT", false),
-                 "log messages go to stdout instead of logfiles");
-
-GLOG_DEFINE_int32(logcleansecs, 60 * 5, // every 5 minutes
-                  "Clean overdue logs every this many second");
-
-GLOG_DEFINE_int32(logbuflevel, 0,
-                  "Buffer log message for at most this many seconds"
-                  " (-1 means don't buffer; 0 means buffer INFO only;"
-                  " ...)");
-GLOG_DEFINE_int32(logemaillevel, 999,
-                  "Email log messages logged at this level or higher"
-                  " (0 means email all; 3 means email FATAL only;"
-                  " ...)");
-GLOG_DEFINE_int32(logfile_mode, 0664, "Log file mode/permissions.");
-
-DEFINE_int32(stderrthreshold, GLOG_ERROR,
-             "log messages at or above this level are copied to stderr in "
-             "addition to logfiles. This flag obsoletes --alsologtostderr.");
-
-GLOG_DEFINE_string(alsologtoemail, "",
-                   "log messages go to these email addresses "
-                   "in addition to logfiles");
-
-GLOG_DEFINE_string(
-    log_dir, DefaultLogDir(),
-    "If specified, logfiles are written into this directory instead "
-    "of the default logging directory");
-GLOG_DEFINE_string(log_link, "",
-                   "Put additional links to the log "
-                   "files in this directory");
-
-GLOG_DEFINE_uint32(max_log_size, 1800,
-                   "approx. maximum log file size (in MB). A value of 0 will "
-                   "be silently overridden to 1.");
-
-enum { PATH_SEPARATOR = '/' };
-
-string PrettyDuration(int secs) {
-  std::stringstream result;
-  int mins = secs / 60;
-  int hours = mins / 60;
-  mins = mins % 60;
-  secs = secs % 60;
-  result.fill('0');
-  result << hours << ':' << setw(2) << mins << ':' << setw(2) << secs;
-  return result.str();
-}
-
 static void ColoredWriteToStderrOrStdout(FILE *output, LogSeverity severity,
                                          const char *message, size_t len) {
-  bool is_stdout = (output == stdout);
   fwrite(message, len, 1, output);
 }
 
@@ -176,11 +186,6 @@ static uint32 MaxLogSize() {
   return (FLAGS_max_log_size > 0 && FLAGS_max_log_size < 4096
               ? FLAGS_max_log_size
               : 1);
-}
-
-const string MyUserName() {
-  string name = getenv("USER");
-  return name;
 }
 
 static void ColoredWriteToStdout(LogSeverity severity, const char *message,
@@ -221,6 +226,100 @@ static GLogColor SeverityToColor(LogSeverity severity) {
   return color;
 }
 
+static void GetHostName(string *hostname) {
+#if defined(HAVE_SYS_UTSNAME_H)
+  struct utsname buf;
+  if (uname(&buf) < 0) {
+    // ensure null termination on failure
+    *buf.nodename = '\0';
+  }
+  *hostname = buf.nodename;
+#elif defined(OS_WINDOWS)
+  char buf[MAX_COMPUTERNAME_LENGTH + 1];
+  DWORD len = MAX_COMPUTERNAME_LENGTH + 1;
+  if (GetComputerNameA(buf, &len)) {
+    *hostname = buf;
+  } else {
+    hostname->clear();
+  }
+#else
+  *hostname = "(unknown)";
+#endif
+}
+
+static bool SendEmailInternal(const char *dest, const char *subject,
+                              const char *body, bool use_logging) {
+  return false;
+}
+
+static void GetTempDirectories(vector<string> *list) {
+  list->clear();
+  const char *candidates[] = {
+      getenv("TEST_TMPDIR"),
+      getenv("TMPDIR"),
+      getenv("TMP"),
+      "./test",
+  };
+
+  for (auto d : candidates) {
+    if (!d)
+      continue;
+
+    string dstr = d;
+    if (dstr[dstr.size() - 1] != '/') {
+      dstr += "/";
+    }
+    list->push_back(dstr);
+
+    struct stat statbuf;
+    if (!stat(d, &statbuf) && S_ISDIR(statbuf.st_mode)) {
+      return;
+    }
+  }
+}
+static vector<string> *logging_directories_list;
+const vector<string> &GetLoggingDirectories() {
+  // Not strictly thread-safe but we're called early in InitGoogle().
+  if (logging_directories_list == nullptr) {
+    logging_directories_list = new vector<string>;
+
+    if (!FLAGS_log_dir.empty()) {
+      logging_directories_list->push_back(FLAGS_log_dir);
+    } else {
+      GetTempDirectories(logging_directories_list);
+      logging_directories_list->push_back("./");
+    }
+  }
+  return *logging_directories_list;
+}
+
+// Returns true iff terimnal supports using colors in output
+static bool TerminalSupportsColor() {
+  bool term_supports_color = false;
+#ifdef OS_WINDOWS
+  // on Windows TERM variable is usually not set, but the console does
+  // support colors
+  term_supports_color = true;
+#else
+  // On non-Windows platforms, we rely on the TERM variable
+  const char *const term = getenv("TERM");
+  if (term != nullptr && term[0] != '\0') {
+    term_supports_color =
+        !strcmp(term, "xterm") || !strcmp(term, "xterm-color") ||
+        !strcmp(term, "xterm-256color") || !strcmp(term, "screen-256color") ||
+        !strcmp(term, "konsole") || !strcmp(term, "konsole-16color") ||
+        !strcmp(term, "konsole-256color") || !strcmp(term, "screen") ||
+        !strcmp(term, "linux") || !strcmp(term, "cygwin");
+  }
+#endif
+  return term_supports_color;
+}
+
+const string MyUserName() {
+  string name = getenv("USER");
+  return name;
+}
+
 int64 CycleClock_Now() {
   // TODO(hamaji): temporary impementation - it might be too slow.
   struct timeval tv;
@@ -236,6 +335,19 @@ WallTime WallTime_Now() {
 const char *const_basename(const char *filepath) {
   const char *base = strrchr(filepath, '/');
   return base ? (base + 1) : filepath;
+}
+
+void InitInvocationName(const char *argv0) {
+  const char *slash = strchr(argv0, '/');
+  g_program_invocation_short_name = slash ? slash + 1 : argv0;
+}
+
+const char *ProgramInvocationShortName() {
+  if (g_program_invocation_short_name != nullptr) {
+    return g_program_invocation_short_name;
+  } else {
+    return "UNKNOW";
+  }
 }
 
 struct QLog::LogMessageData {
@@ -264,7 +376,6 @@ private:
   void operator=(const LogMessageData &) = delete;
 };
 
-Logger::~Logger() = default;
 
 class LogFileObject : public Logger {
 public:
@@ -343,9 +454,6 @@ private:
   int64 next_cleanup_time_{0};
 };
 
-LogCleaner::LogCleaner() = default;
-
-LogCleaner log_cleaner;
 
 class LogDestination {
 public:
@@ -436,413 +544,15 @@ private:
   LogDestination operator=(const LogDestination &) = delete;
 };
 
-// Returns true iff terimnal supports using colors in output
-static bool TerminalSupportsColor() {
-  bool term_supports_color = false;
-#ifdef OS_WINDOWS
-  // on Windows TERM variable is usually not set, but the console does
-  // support colors
-  term_supports_color = true;
-#else
-  // On non-Windows platforms, we rely on the TERM variable
-  const char *const term = getenv("TERM");
-  if (term != nullptr && term[0] != '\0') {
-    term_supports_color =
-        !strcmp(term, "xterm") || !strcmp(term, "xterm-color") ||
-        !strcmp(term, "xterm-256color") || !strcmp(term, "screen-256color") ||
-        !strcmp(term, "konsole") || !strcmp(term, "konsole-16color") ||
-        !strcmp(term, "konsole-256color") || !strcmp(term, "screen") ||
-        !strcmp(term, "linux") || !strcmp(term, "cygwin");
-  }
-#endif
-  return term_supports_color;
-}
+LogCleaner::LogCleaner() = default;
 
-static void GetHostName(string *hostname) {
-//#if defined(HAVE_SYS_UTSNAME_H)
-  struct utsname buf;
-  if (uname(&buf) < 0) {
-    // ensure null termination on failure
-    *buf.nodename = '\0';
-  }
-  *hostname = buf.nodename;
-//#elif defined(OS_WINDOWS)
-//  char buf[MAX_COMPUTERNAME_LENGTH + 1];
-//  DWORD len = MAX_COMPUTERNAME_LENGTH + 1;
-//  if (GetComputerNameA(buf, &len)) {
-//    *hostname = buf;
-//  } else {
-//    hostname->clear();
-//  }
-//#else
-//#warning There is no way to retrieve the host name.
-//  *hostname = "(unknown)";
-//#endif
-}
-
-static bool SendEmailInternal(const char *dest, const char *subject,
-                              const char *body, bool use_logging) {
-  return false;
-}
-
-bool LogCleaner::IsLogLastModifiedOver(const string &filepath,
-                                       unsigned int days) const {
-  struct stat file_stat;
-
-  if (stat(filepath.c_str(), &file_stat) == 0) {
-    const time_t seconds_in_a_day = 60 * 60 * 24;
-    time_t last_modified_time = file_stat.st_mtime;
-    time_t current_time = time(nullptr);
-    return difftime(current_time, last_modified_time) > days * seconds_in_a_day;
-  }
-
-  return false;
-}
-
-vector<string>
-LogCleaner::GetOverdueLogNames(string log_directory, unsigned int days,
-                               const string &base_filename,
-                               const string &filename_extension) const {
-  vector<string> overdue_log_names;
-
-  DIR *dir;
-  struct dirent *ent;
-
-  if ((dir = opendir(log_directory.c_str()))) {
-    while ((ent = readdir(dir))) {
-      if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-        continue;
-      }
-
-      string filepath = ent->d_name;
-      const char *const dir_delim_end =
-          possible_dir_delim + sizeof(possible_dir_delim);
-
-      if (!log_directory.empty() &&
-          std::find(possible_dir_delim, dir_delim_end,
-                    log_directory[log_directory.size()] - 1) != dir_delim_end) {
-        filepath = log_directory + filepath;
-      }
-
-      if (IsLogFromCurrentProject(filepath, base_filename,
-                                  filename_extension) &&
-          IsLogLastModifiedOver(filepath, days)) {
-        overdue_log_names.push_back(filepath);
-      }
-    }
-    closedir(dir);
-  }
-  return overdue_log_names;
-}
-
-
-bool LogCleaner::IsLogFromCurrentProject(const string& filepath,
-                                         const string& base_filename,
-                                         const string& filename_extension) const {
-  // We should remove duplicated delimiters from `base_filename`, e.g.,
-  // before: "/tmp//<base_filename>.<create_time>.<pid>"
-  // after:  "/tmp/<base_filename>.<create_time>.<pid>"
-  string cleaned_base_filename;
-
-  const char* const dir_delim_end =
-      possible_dir_delim + sizeof(possible_dir_delim);
-
-  size_t real_filepath_size = filepath.size();
-  for (char c : base_filename) {
-    if (cleaned_base_filename.empty()) {
-      cleaned_base_filename += c;
-    } else if (std::find(possible_dir_delim, dir_delim_end, c) ==
-                   dir_delim_end ||
-               (!cleaned_base_filename.empty() &&
-                c != cleaned_base_filename[cleaned_base_filename.size() - 1])) {
-      cleaned_base_filename += c;
-    }
-  }
-
-  // Return early if the filename doesn't start with `cleaned_base_filename`.
-  if (filepath.find(cleaned_base_filename) != 0) {
-    return false;
-  }
-
-  // Check if in the string `filename_extension` is right next to
-  // `cleaned_base_filename` in `filepath` if the user
-  // has set a custom filename extension.
-  if (!filename_extension.empty()) {
-    if (cleaned_base_filename.size() >= real_filepath_size) {
-      return false;
-    }
-    // for origin version, `filename_extension` is middle of the `filepath`.
-    string ext = filepath.substr(cleaned_base_filename.size(), filename_extension.size());
-    if (ext == filename_extension) {
-      cleaned_base_filename += filename_extension;
-    }
-    else {
-      // for new version, `filename_extension` is right of the `filepath`.
-      if (filename_extension.size() >= real_filepath_size) {
-        return false;
-      }
-      real_filepath_size = filepath.size() - filename_extension.size();
-      if (filepath.substr(real_filepath_size) != filename_extension) {
-        return false;
-      }
-    }
-  }
-
-  // The characters after `cleaned_base_filename` should match the format:
-  // YYYYMMDD-HHMMSS.pid
-  for (size_t i = cleaned_base_filename.size(); i < real_filepath_size; i++) {
-    const char& c = filepath[i];
-
-    if (i <= cleaned_base_filename.size() + 7) { // 0 ~ 7 : YYYYMMDD
-      if (c < '0' || c > '9') { return false; }
-
-    } else if (i == cleaned_base_filename.size() + 8) { // 8: -
-      if (c != '-') { return false; }
-
-    } else if (i <= cleaned_base_filename.size() + 14) { // 9 ~ 14: HHMMSS
-      if (c < '0' || c > '9') { return false; }
-
-    } else if (i == cleaned_base_filename.size() + 15) { // 15: .
-      if (c != '.') { return false; }
-
-    } else if (i >= cleaned_base_filename.size() + 16) { // 16+: pid
-      if (c < '0' || c > '9') { return false; }
-    }
-  }
-
-  return true;
-}
-
-void InitInvocationName(const char *argv0) {
-  const char *slash = strchr(argv0, '/');
-  g_program_invocation_short_name = slash ? slash + 1 : argv0;
-}
-
-const char *ProgramInvocationShortName() {
-  if (g_program_invocation_short_name != nullptr) {
-    return g_program_invocation_short_name;
-  } else {
-    return "UNKNOW";
-  }
-}
+LogCleaner log_cleaner;
 
 LogSeverity LogDestination::email_logging_severity_ = 99999;
 
 string LogDestination::addresses_;
+
 string LogDestination::hostname_;
-
-vector<LogSink *> *LogDestination::sinks_ = nullptr;
-bool LogDestination::terminal_supports_color_ = TerminalSupportsColor();
-
-const string &LogDestination::hostname() {
-  if (hostname_.empty()) {
-    GetHostName(&hostname_);
-    if (hostname_.empty()) {
-      hostname_ = "(unknown)";
-    }
-  }
-  return hostname_;
-}
-
-LogDestination::LogDestination(LogSeverity severity, const char *base_filename)
-    : fileobject_(severity, base_filename), logger_(&fileobject_) {}
-
-LogDestination::~LogDestination() { ResetLoggerImpl(); }
-
-void LogDestination::SetLoggerImpl(Logger *logger) {
-  if (logger_ == logger) {
-    // Prevent releasing currently held sink on reset
-    return;
-  }
-
-  if (logger_ && logger_ != &fileobject_) {
-    delete logger_;
-  }
-
-  logger_ = logger;
-}
-
-inline void LogDestination::FlushLogFilesUnsafe(int min_severity) {
-  // assume we have the log_mutex or we simply don't care
-  // about it
-  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
-    LogDestination *log = log_destinations_[i];
-    if (log != nullptr) {
-      // Flush the base fileObject_ logger directly instead of going
-      // through any wrappers to reduce change of deadlock
-      log->fileobject_.FlushUnlocked();
-    }
-  }
-}
-
-inline void LogDestination::FlushLogFiles(int min_severity) {
-  // Prevent any subtle race conditions by wrapping a mutex lock around
-  // all this stuff.
-  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
-    LogDestination *log = log_destination(i);
-    if (log != nullptr) {
-      log->logger_->Flush();
-    }
-  }
-}
-
-inline void LogDestination::SetLogDestination(LogSeverity severity,
-                                              const char *base_filename) {
-  assert(severity >= 0 && severity < NUM_SEVERITIES);
-  // Prevent any subtle race conditions by wrapping a mutex lock around
-  // all this stuff.
-  log_destination(severity)->fileobject_.SetBasename(base_filename);
-}
-
-inline void LogDestination::SetLogSymlink(LogSeverity severity,
-                                          const char *symlink_basename) {
-  log_destination(severity)->fileobject_.SetSymlinkBasename(symlink_basename);
-}
-
-inline void LogDestination::AddLogSink(LogSink *destination) {
-  // Prevent any subtle race conditions by wrapping a mutex lock around
-  // all this stuff
-  if (!sinks_)
-    sinks_ = new vector<LogSink *>;
-  sinks_->push_back(destination);
-}
-
-inline void LogDestination::RemoveLogSink(LogSink *destination) {
-  // Prevent any subtle race condition by wrapping a mutex lock around
-  // all this stuff.
-  // This doesn't keep the sinks in order
-  if (sinks_) {
-    sinks_->erase(std::remove(sinks_->begin(), sinks_->end(), destination),
-                  sinks_->end());
-  }
-}
-
-inline void LogDestination::SetLogFilenameExtension(const char *ext) {
-  for (int severity = 0; severity < NUM_SEVERITIES; ++severity) {
-    log_destination(severity)->fileobject_.SetExtension(ext);
-  }
-}
-
-inline void LogDestination::LogToStderr() {
-  // *Don't* put this stuff in a mutex lock, since SetStderrLogging &
-  // SetLogDestination already do the locking!
-  SetStderrLogging(0);
-  for (int i = 0; i < NUM_SEVERITIES; ++i) {
-    SetLogDestination(i, "");
-  }
-}
-
-inline void LogDestination::SetEmailLogging(LogSeverity min_severity,
-                                            const char *addresses) {
-  assert(min_severity >= 0 && min_severity < NUM_SEVERITIES);
-  // Prevent any subtle race condition by wrapping a mutex lock around
-  // all this stuff.
-  LogDestination::email_logging_severity_ = min_severity;
-  LogDestination::addresses_ = addresses;
-}
-
-inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
-                                             const char *message,
-                                             size_t message_len,
-                                             size_t prefix_len) {
-
-  if ((severity >= FLAGS_stderrthreshold) || FLAGS_alsologtostderr) {
-    ColoredWriteToStderr(severity, message, message_len);
-    (void)prefix_len;
-  }
-}
-
-inline void LogDestination::MaybeLogToEmail(LogSeverity severity,
-                                            const char *message, size_t len) {
-  if (severity >= email_logging_severity_ || severity >= FLAGS_logemaillevel) {
-    string to(FLAGS_alsologtoemail);
-    if (!addresses_.empty()) {
-      if (!to.empty()) {
-        to += ",";
-      }
-      to += addresses_;
-    }
-    const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " +
-                         ProgramInvocationShortName());
-    string body(hostname());
-    body += "\n\n";
-    body.append(message, len);
-
-    // should NOT use SendEmail(). The caller of this function holds the
-    // log_mutex and SendEmail() calls LOG/VLOG which will block trying to
-    // acquire the log_mutex object. Use SendEmailInternal() and set use_logging
-    // to false
-    SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
-  }
-}
-
-inline void LogDestination::MaybeLogToLogfile(LogSeverity severity,
-                                              time_t timestamp,
-                                              const char *message, size_t len) {
-  const bool should_flush = severity > FLAGS_logbuflevel;
-  LogDestination *destination = log_destination(severity);
-  destination->logger_->Write(should_flush, timestamp, message, len);
-}
-
-inline void LogDestination::LogToAllLogfiles(LogSeverity severity,
-                                             time_t timestamp,
-                                             const char *message, size_t len) {
-  if (FLAGS_logtostdout) {
-    ColoredWriteToStdout(severity, message, len);
-  } else if (FLAGS_logtostderr) {
-    ColoredWriteToStderr(severity, message, len);
-  } else {
-    for (int i = severity; i >= 0; --i) {
-      LogDestination::MaybeLogToLogfile(i, timestamp, message, len);
-    }
-  }
-}
-
-inline void LogDestination::LogToSinks(LogSeverity severity,
-                                       const char *full_filename,
-                                       const char *base_filename, int line,
-                                       const LogMessageTime &logmsgtime,
-                                       const char *message,
-                                       size_t message_len) {
-  if (sinks_) {
-    for (size_t i = sinks_->size(); i-- > 0;) {
-      (*sinks_)[i]->send(severity, full_filename, base_filename, line,
-                         logmsgtime, message, message_len);
-    }
-  }
-}
-
-inline void LogDestination::WaitForSinks(QLog::LogMessageData *data) {
-  if (sinks_) {
-    for (size_t i = sinks_->size(); i-- > 0;) {
-      (*sinks_)[i]->WaitTillSent();
-    }
-  }
-
-  const bool send_to_sink = true;
-  if (send_to_sink && data->sink_ != nullptr) {
-    data->sink_->WaitTillSent();
-  }
-}
-
-LogDestination *LogDestination::log_destinations_[NUM_SEVERITIES];
-
-inline LogDestination *LogDestination::log_destination(LogSeverity severity) {
-  assert(severity >= 0 && severity < NUM_SEVERITIES);
-  if (!log_destinations_[severity]) {
-    log_destinations_[severity] = new LogDestination(severity, nullptr);
-  }
-  return log_destinations_[severity];
-}
-
-void LogDestination::DeleteLogDestinations() {
-  for (auto &log_destination : log_destinations_) {
-    delete log_destination;
-    log_destination = nullptr;
-  }
-  delete sinks_;
-  sinks_ = nullptr;
-}
 
 LogFileObject::LogFileObject(LogSeverity severity, const char *base_filename)
     : base_filename_selected_(base_filename != nullptr),
@@ -1090,45 +800,144 @@ void LogFileObject::Write(bool force_flush, time_t timestamp,
   }
 }
 
-static void GetTempDirectories(vector<string> *list) {
-  list->clear();
-  const char *candidates[] = {
-      getenv("TEST_TMPDIR"),
-      getenv("TMPDIR"),
-      getenv("TMP"),
-      "./test",
-  };
 
-  for (auto d : candidates) {
-    if (!d)
-      continue;
+void LogFileObject::Flush() { FlushUnlocked(); }
 
-    string dstr = d;
-    if (dstr[dstr.size() - 1] != '/') {
-      dstr += "/";
-    }
-    list->push_back(dstr);
-
-    struct stat statbuf;
-    if (!stat(d, &statbuf) && S_ISDIR(statbuf.st_mode)) {
-      return;
-    }
+void LogFileObject::FlushUnlocked() {
+  if (file_ != nullptr) {
+    fflush(file_);
+    bytes_since_flush_ = 0;
   }
+  return;
 }
-static vector<string> *logging_directories_list;
-const vector<string> &GetLoggingDirectories() {
-  // Not strictly thread-safe but we're called early in InitGoogle().
-  if (logging_directories_list == nullptr) {
-    logging_directories_list = new vector<string>;
 
-    if (!FLAGS_log_dir.empty()) {
-      logging_directories_list->push_back(FLAGS_log_dir);
-    } else {
-      GetTempDirectories(logging_directories_list);
-      logging_directories_list->push_back("./");
+
+bool LogCleaner::IsLogLastModifiedOver(const string &filepath,
+                                       unsigned int days) const {
+  struct stat file_stat;
+
+  if (stat(filepath.c_str(), &file_stat) == 0) {
+    const time_t seconds_in_a_day = 60 * 60 * 24;
+    time_t last_modified_time = file_stat.st_mtime;
+    time_t current_time = time(nullptr);
+    return difftime(current_time, last_modified_time) > days * seconds_in_a_day;
+  }
+
+  return false;
+}
+
+vector<string>
+LogCleaner::GetOverdueLogNames(string log_directory, unsigned int days,
+                               const string &base_filename,
+                               const string &filename_extension) const {
+  vector<string> overdue_log_names;
+
+  DIR *dir;
+  struct dirent *ent;
+
+  if ((dir = opendir(log_directory.c_str()))) {
+    while ((ent = readdir(dir))) {
+      if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+        continue;
+      }
+
+      string filepath = ent->d_name;
+      const char *const dir_delim_end =
+          possible_dir_delim + sizeof(possible_dir_delim);
+
+      if (!log_directory.empty() &&
+          std::find(possible_dir_delim, dir_delim_end,
+                    log_directory[log_directory.size()] - 1) != dir_delim_end) {
+        filepath = log_directory + filepath;
+      }
+
+      if (IsLogFromCurrentProject(filepath, base_filename,
+                                  filename_extension) &&
+          IsLogLastModifiedOver(filepath, days)) {
+        overdue_log_names.push_back(filepath);
+      }
+    }
+    closedir(dir);
+  }
+  return overdue_log_names;
+}
+
+
+bool LogCleaner::IsLogFromCurrentProject(const string& filepath,
+                                         const string& base_filename,
+                                         const string& filename_extension) const {
+  // We should remove duplicated delimiters from `base_filename`, e.g.,
+  // before: "/tmp//<base_filename>.<create_time>.<pid>"
+  // after:  "/tmp/<base_filename>.<create_time>.<pid>"
+  string cleaned_base_filename;
+
+  const char* const dir_delim_end =
+      possible_dir_delim + sizeof(possible_dir_delim);
+
+  size_t real_filepath_size = filepath.size();
+  for (char c : base_filename) {
+    if (cleaned_base_filename.empty()) {
+      cleaned_base_filename += c;
+    } else if (std::find(possible_dir_delim, dir_delim_end, c) ==
+                   dir_delim_end ||
+               (!cleaned_base_filename.empty() &&
+                c != cleaned_base_filename[cleaned_base_filename.size() - 1])) {
+      cleaned_base_filename += c;
     }
   }
-  return *logging_directories_list;
+
+  // Return early if the filename doesn't start with `cleaned_base_filename`.
+  if (filepath.find(cleaned_base_filename) != 0) {
+    return false;
+  }
+
+  // Check if in the string `filename_extension` is right next to
+  // `cleaned_base_filename` in `filepath` if the user
+  // has set a custom filename extension.
+  if (!filename_extension.empty()) {
+    if (cleaned_base_filename.size() >= real_filepath_size) {
+      return false;
+    }
+    // for origin version, `filename_extension` is middle of the `filepath`.
+    string ext = filepath.substr(cleaned_base_filename.size(), filename_extension.size());
+    if (ext == filename_extension) {
+      cleaned_base_filename += filename_extension;
+    }
+    else {
+      // for new version, `filename_extension` is right of the `filepath`.
+      if (filename_extension.size() >= real_filepath_size) {
+        return false;
+      }
+      real_filepath_size = filepath.size() - filename_extension.size();
+      if (filepath.substr(real_filepath_size) != filename_extension) {
+        return false;
+      }
+    }
+  }
+
+  // The characters after `cleaned_base_filename` should match the format:
+  // YYYYMMDD-HHMMSS.pid
+  for (size_t i = cleaned_base_filename.size(); i < real_filepath_size; i++) {
+    const char& c = filepath[i];
+
+    if (i <= cleaned_base_filename.size() + 7) { // 0 ~ 7 : YYYYMMDD
+      if (c < '0' || c > '9') { return false; }
+
+    } else if (i == cleaned_base_filename.size() + 8) { // 8: -
+      if (c != '-') { return false; }
+
+    } else if (i <= cleaned_base_filename.size() + 14) { // 9 ~ 14: HHMMSS
+      if (c < '0' || c > '9') { return false; }
+
+    } else if (i == cleaned_base_filename.size() + 15) { // 15: .
+      if (c != '.') { return false; }
+
+    } else if (i >= cleaned_base_filename.size() + 16) { // 16+: pid
+      if (c < '0' || c > '9') { return false; }
+    }
+  }
+
+  return true;
 }
 
 void LogCleaner::Enable(unsigned int overdue_days) {
@@ -1178,14 +987,217 @@ void LogCleaner::Run(bool base_filename_selected, const string &base_filename,
   }
 }
 
-void LogFileObject::Flush() { FlushUnlocked(); }
+vector<LogSink *> *LogDestination::sinks_ = nullptr;
+bool LogDestination::terminal_supports_color_ = TerminalSupportsColor();
 
-void LogFileObject::FlushUnlocked() {
-  if (file_ != nullptr) {
-    fflush(file_);
-    bytes_since_flush_ = 0;
+const string &LogDestination::hostname() {
+  if (hostname_.empty()) {
+    GetHostName(&hostname_);
+    if (hostname_.empty()) {
+      hostname_ = "(unknown)";
+    }
   }
-  return;
+  return hostname_;
+}
+
+LogDestination::LogDestination(LogSeverity severity, const char *base_filename)
+    : fileobject_(severity, base_filename), logger_(&fileobject_) {}
+
+LogDestination::~LogDestination() { ResetLoggerImpl(); }
+
+void LogDestination::SetLoggerImpl(Logger *logger) {
+  if (logger_ == logger) {
+    // Prevent releasing currently held sink on reset
+    return;
+  }
+
+  if (logger_ && logger_ != &fileobject_) {
+    delete logger_;
+  }
+
+  logger_ = logger;
+}
+
+inline void LogDestination::FlushLogFilesUnsafe(int min_severity) {
+  // assume we have the log_mutex or we simply don't care
+  // about it
+  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
+    LogDestination *log = log_destinations_[i];
+    if (log != nullptr) {
+      // Flush the base fileObject_ logger directly instead of going
+      // through any wrappers to reduce change of deadlock
+      log->fileobject_.FlushUnlocked();
+    }
+  }
+}
+
+inline void LogDestination::FlushLogFiles(int min_severity) {
+  // Prevent any subtle race conditions by wrapping a mutex lock around
+  // all this stuff.
+  for (int i = min_severity; i < NUM_SEVERITIES; ++i) {
+    LogDestination *log = log_destination(i);
+    if (log != nullptr) {
+      log->logger_->Flush();
+    }
+  }
+}
+
+inline void LogDestination::SetLogDestination(LogSeverity severity,
+                                              const char *base_filename) {
+  assert(severity >= 0 && severity < NUM_SEVERITIES);
+  // Prevent any subtle race conditions by wrapping a mutex lock around
+  // all this stuff.
+  log_destination(severity)->fileobject_.SetBasename(base_filename);
+}
+
+inline void LogDestination::SetLogSymlink(LogSeverity severity,
+                                          const char *symlink_basename) {
+  log_destination(severity)->fileobject_.SetSymlinkBasename(symlink_basename);
+}
+
+inline void LogDestination::AddLogSink(LogSink *destination) {
+  // Prevent any subtle race conditions by wrapping a mutex lock around
+  // all this stuff
+  if (!sinks_)
+    sinks_ = new vector<LogSink *>;
+  sinks_->push_back(destination);
+}
+
+inline void LogDestination::RemoveLogSink(LogSink *destination) {
+  // Prevent any subtle race condition by wrapping a mutex lock around
+  // all this stuff.
+  // This doesn't keep the sinks in order
+  if (sinks_) {
+    sinks_->erase(std::remove(sinks_->begin(), sinks_->end(), destination),
+                  sinks_->end());
+  }
+}
+
+inline void LogDestination::SetLogFilenameExtension(const char *ext) {
+  for (int severity = 0; severity < NUM_SEVERITIES; ++severity) {
+    log_destination(severity)->fileobject_.SetExtension(ext);
+  }
+}
+
+inline void LogDestination::LogToStderr() {
+  // *Don't* put this stuff in a mutex lock, since SetStderrLogging &
+  // SetLogDestination already do the locking!
+  SetStderrLogging(0);
+  for (int i = 0; i < NUM_SEVERITIES; ++i) {
+    SetLogDestination(i, "");
+  }
+}
+
+inline void LogDestination::SetEmailLogging(LogSeverity min_severity,
+                                            const char *addresses) {
+  assert(min_severity >= 0 && min_severity < NUM_SEVERITIES);
+  // Prevent any subtle race condition by wrapping a mutex lock around
+  // all this stuff.
+  LogDestination::email_logging_severity_ = min_severity;
+  LogDestination::addresses_ = addresses;
+}
+
+inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
+                                             const char *message,
+                                             size_t message_len,
+                                             size_t prefix_len) {
+
+  if ((severity >= FLAGS_stderrthreshold) || FLAGS_alsologtostderr) {
+    ColoredWriteToStderr(severity, message, message_len);
+    (void)prefix_len;
+  }
+}
+
+inline void LogDestination::MaybeLogToEmail(LogSeverity severity,
+                                            const char *message, size_t len) {
+  if (severity >= email_logging_severity_ || severity >= FLAGS_logemaillevel) {
+    string to(FLAGS_alsologtoemail);
+    if (!addresses_.empty()) {
+      if (!to.empty()) {
+        to += ",";
+      }
+      to += addresses_;
+    }
+    const string subject(string("[LOG] ") + LogSeverityNames[severity] + ": " +
+                         ProgramInvocationShortName());
+    string body(hostname());
+    body += "\n\n";
+    body.append(message, len);
+
+    // should NOT use SendEmail(). The caller of this function holds the
+    // log_mutex and SendEmail() calls LOG/VLOG which will block trying to
+    // acquire the log_mutex object. Use SendEmailInternal() and set use_logging
+    // to false
+    SendEmailInternal(to.c_str(), subject.c_str(), body.c_str(), false);
+  }
+}
+
+inline void LogDestination::MaybeLogToLogfile(LogSeverity severity,
+                                              time_t timestamp,
+                                              const char *message, size_t len) {
+  const bool should_flush = severity > FLAGS_logbuflevel;
+  LogDestination *destination = log_destination(severity);
+  destination->logger_->Write(should_flush, timestamp, message, len);
+}
+
+inline void LogDestination::LogToAllLogfiles(LogSeverity severity,
+                                             time_t timestamp,
+                                             const char *message, size_t len) {
+  if (FLAGS_logtostdout) {
+    ColoredWriteToStdout(severity, message, len);
+  } else if (FLAGS_logtostderr) {
+    ColoredWriteToStderr(severity, message, len);
+  } else {
+    for (int i = severity; i >= 0; --i) {
+      LogDestination::MaybeLogToLogfile(i, timestamp, message, len);
+    }
+  }
+}
+
+inline void LogDestination::LogToSinks(LogSeverity severity,
+                                       const char *full_filename,
+                                       const char *base_filename, int line,
+                                       const LogMessageTime &logmsgtime,
+                                       const char *message,
+                                       size_t message_len) {
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0;) {
+      (*sinks_)[i]->send(severity, full_filename, base_filename, line,
+                         logmsgtime, message, message_len);
+    }
+  }
+}
+
+inline void LogDestination::WaitForSinks(QLog::LogMessageData *data) {
+  if (sinks_) {
+    for (size_t i = sinks_->size(); i-- > 0;) {
+      (*sinks_)[i]->WaitTillSent();
+    }
+  }
+
+  const bool send_to_sink = true;
+  if (send_to_sink && data->sink_ != nullptr) {
+    data->sink_->WaitTillSent();
+  }
+}
+
+LogDestination *LogDestination::log_destinations_[NUM_SEVERITIES];
+
+inline LogDestination *LogDestination::log_destination(LogSeverity severity) {
+  assert(severity >= 0 && severity < NUM_SEVERITIES);
+  if (!log_destinations_[severity]) {
+    log_destinations_[severity] = new LogDestination(severity, nullptr);
+  }
+  return log_destinations_[severity];
+}
+
+void LogDestination::DeleteLogDestinations() {
+  for (auto &log_destination : log_destinations_) {
+    delete log_destination;
+    log_destination = nullptr;
+  }
+  delete sinks_;
+  sinks_ = nullptr;
 }
 
 LogMessageTime::LogMessageTime()
@@ -1282,7 +1294,6 @@ void QLog::Init(const char *file, int line, LogSeverity severity,
 }
 
 void QLog::SendToLog() {
-  static bool already_warned_before_initgoogle = false;
   FLAGS_logtostderr = false;
   FLAGS_logtostdout = false;
 

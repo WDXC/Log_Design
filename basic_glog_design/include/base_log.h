@@ -14,6 +14,128 @@
 #include <ctime>
 #include <vector>
 
+#pragma push_macro("DECLARE_VARIABLE")
+#pragma push_macro("DECLARE_bool")
+#pragma push_macro("DECLARE_string")
+#pragma push_macro("DECLARE_int32")
+#pragma push_macro("DECLARE_uint32")
+
+#ifdef DECLARE_VARIABLE
+#undef DECLARE_VARIABLE
+#endif
+
+#ifdef DECLARE_bool
+#undef DECLARE_bool
+#endif
+
+#ifdef DECLARE_string
+#undef DECLARE_string
+#endif
+
+#ifdef DECLARE_int32
+#undef DECLARE_int32
+#endif
+
+#ifdef DECLARE_uint32
+#undef DECLARE_uint32
+#endif
+
+#ifndef DECLARE_VARIABLE
+#define DECLARE_VARIABLE(type, shorttype, name, tn)                     \
+  namespace fL##shorttype {                                             \
+    extern type FLAGS_##name;                      \
+  }                                                                     \
+  using fL##shorttype::FLAGS_##name
+
+// bool specialization
+#define DECLARE_bool(name) \
+  DECLARE_VARIABLE(bool, B, name, bool)
+
+// int32 specialization
+#define DECLARE_int32(name) \
+  DECLARE_VARIABLE(int32, I, name, int32)
+
+#if !defined(DECLARE_uint32)
+// uint32 specialization
+#define DECLARE_uint32(name) \
+  DECLARE_VARIABLE(uint32, U, name, uint32)
+#endif // !defined(DECLARE_uint32) && !(@ac_cv_have_libgflags@)
+
+// Special case for string, because we have to specify the namespace
+// std::string, which doesn't play nicely with our FLAG__namespace hackery.
+#define DECLARE_string(name)                                            \
+  namespace fLS {                                                       \
+    extern  std::string& FLAGS_##name;              \
+  }                                                                     \
+  using fLS::FLAGS_##name
+#endif
+
+// Set whether appending a timestamp to the log file name
+DECLARE_bool(timestamp_in_logfile_name);
+
+// Set whether log messages go to stdout instead of logfiles
+DECLARE_bool(logtostdout);
+
+// Set color messages logged to stdout (if supported by terminal).
+DECLARE_bool(colorlogtostdout);
+
+// Set whether log messages go to stderr instead of logfiles
+DECLARE_bool(logtostderr);
+
+// Set whether log messages go to stderr in addition to logfiles.
+DECLARE_bool(alsologtostderr);
+
+// Set color messages logged to stderr (if supported by terminal).
+DECLARE_bool(colorlogtostderr);
+
+// Log messages at a level >= this flag are automatically sent to
+// stderr in addition to log files.
+DECLARE_int32(stderrthreshold);
+
+// Set whether the log file header should be written upon creating a file.
+DECLARE_bool(log_file_header);
+
+// Set whether the log prefix should be prepended to each line of output.
+DECLARE_bool(log_prefix);
+
+// Set whether the year should be included in the log prefix.
+DECLARE_bool(log_year_in_prefix);
+
+// Log messages at a level <= this flag are buffered.
+// Log messages at a higher level are flushed immediately.
+DECLARE_int32(logbuflevel);
+
+// Sets the maximum number of seconds which logs may be buffered for.
+DECLARE_int32(logbufsecs);
+
+// Log suppression level: messages logged at a lower level than this
+// are suppressed.
+DECLARE_int32(minloglevel);
+
+// If specified, logfiles are written into this directory instead of the
+// default logging directory.
+DECLARE_string(log_dir);
+
+// Set the log file mode.
+DECLARE_int32(logfile_mode);
+
+// Sets the path of the directory into which to put additional links
+// to the log files.
+DECLARE_string(log_link);
+
+DECLARE_int32(v);  // in vlog_is_on.cc
+
+DECLARE_string(vmodule); // also in vlog_is_on.cc
+
+// Sets the maximum log file size (in MB).
+DECLARE_uint32(max_log_size);
+
+// Sets whether to avoid logging to the disk if the disk is full.
+DECLARE_bool(stop_logging_if_full_disk);
+
+// Use UTC time for logging
+DECLARE_bool(log_utc_time);
+
 class LogStreamBuf : public std::streambuf {
 public:
   LogStreamBuf(char *buf, int len) { setp(buf, buf + len - 2); }

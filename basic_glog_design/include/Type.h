@@ -22,14 +22,6 @@ const char* const LogSeverityNames[NUM_SEVERITIES] = {
 
 static const char* g_program_invocation_short_name = nullptr;
 
-static bool BoolFromEnv(const char* varname, bool defval) {
-    const char* const valstr = getenv(varname);
-    if (!valstr) {
-        return defval;
-    }
-    return memchr("tTyY1\0", valstr[0], 6) != nullptr;
-}
-
 enum GLogColor {
     COLOR_DEFAULT,
     COLOR_RED,
@@ -37,7 +29,13 @@ enum GLogColor {
     COLOR_YELLOW
 };
 
-
+static bool BoolFromEnv(const char *varname, bool defval) {
+  const char* const valstr = getenv(varname);
+  if (!valstr) {
+    return defval;
+  }
+  return memchr("tTyY1\0", valstr[0], 6) != nullptr;
+}
 
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
 #define OS_WINDOWS
@@ -83,12 +81,6 @@ enum GLogColor {
   }                                                           \
   using fLS::FLAGS_##name
 
-// bool specialization
-#define DECLARE_bool(name) \
-  DECLARE_VARIABLE(bool, B, name, bool)
-#define DEFINE_bool(name, value, meaning) \
-  DEFINE_VARIABLE(bool, B, name, value, meaning, bool)
-
 #define EnvToBool(envname, dflt) \
   (!getenv(envname) ? (dflt)     \
                     : memchr("tTyY1\0", getenv(envname)[0], 6) != nullptr)
@@ -101,12 +93,24 @@ enum GLogColor {
 
 #define EnvToUInt(envname, dflt) \
     (!getenv(envname) ? (dflt) : strtoul(getenv(envname), nullptr, 10))
+
+// bool specialization
+#define DECLARE_bool(name) \
+  DECLARE_VARIABLE(bool, B, name, bool)
+#define DEFINE_bool(name, value, meaning) \
+  DEFINE_VARIABLE(bool, B, name, value, meaning, bool)
+
 // int32 specialization
 #define DECLARE_int32(name) \
   DECLARE_VARIABLE(int32, I, name, int32)
 #define DEFINE_int32(name, value, meaning) \
   DEFINE_VARIABLE(int32, I, name, value, meaning, int32)
 
+// uint32 specialization
+#ifndef DECLARE_uint32
+#define DECLARE_uint32(name) \
+  DECLARE_VARIABLE(uint32, U, name, uint32)
+#endif // DECLARE_uint64
 
 #define GLOG_DEFINE_bool(name, value, meaning) \
   DEFINE_bool(name, EnvToBool("GLOG_" #name, value), meaning)
@@ -114,14 +118,12 @@ enum GLogColor {
 #define GLOG_DEFINE_int32(name, value, meaning) \
   DEFINE_int32(name, EnvToInt("GLOG_" #name, value), meaning)
 
+#define GLOG_DEFINE_uint32(name, value, meaning) \
+  DEFINE_uint32(name, EnvToUInt("GLOG_" #name, value), meaning)
+
 #define GLOG_DEFINE_string(name, value, meaning)  \
     DEFINE_string(name, EnvToString("GLOG_" #name, value), meaning)
 
-// uint32 specialization
-#ifndef DECLARE_uint32
-#define DECLARE_uint32(name) \
-  DECLARE_VARIABLE(uint32, U, name, uint32)
-#endif // DECLARE_uint64
 #define DEFINE_uint32(name, value, meaning) \
   DEFINE_VARIABLE(uint32, U, name, value, meaning, uint32)
 
