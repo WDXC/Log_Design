@@ -27,6 +27,8 @@ std::string g_application_fingerprint;
 
 static bool stop_writing = false;
 
+static const char* g_program_invocation_short_name = nullptr;
+
 enum { PATH_SEPARATOR = '/' };
 
 int64 UsecToCycles(int64 usec) { return usec; }
@@ -50,6 +52,14 @@ static const char *DefaultLogDir() {
     return env;
   }
   return "";
+}
+
+static bool BoolFromEnv(const char *varname, bool defval) {
+  const char* const valstr = getenv(varname);
+  if (!valstr) {
+    return defval;
+  }
+  return memchr("tTyY1\0", valstr[0], 6) != nullptr;
 }
 
 
@@ -1294,8 +1304,6 @@ void QLog::Init(const char *file, int line, LogSeverity severity,
 }
 
 void QLog::SendToLog() {
-  FLAGS_logtostderr = false;
-  FLAGS_logtostdout = false;
 
   if (FLAGS_logtostderr || FLAGS_logtostdout) {
     if (FLAGS_logtostdout) {

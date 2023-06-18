@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.5)
-project(basic)
+project(Log)
 
 message(STATUS "src this is source dir " ${CMAKE_SOURCE_DIR})
 
 
 SET(CMAKE_BUILD_TYPE "Debug")
-SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g -ggdb")
+SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g -ggdb -Wunused")
 SET( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 
 LINK_DIRECTORIES(${CMAKE_SOURCE_DIR}/lib)
@@ -23,7 +23,7 @@ include_directories(include
 
 # 生成可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES})
-add_library(basic_t SHARED ${SOURCES})
+add_library(${PROJECT_NAME}_base SHARED ${SOURCES})
 add_executable(base_log_unittest test/base_log_test.cpp)
 target_link_libraries(base_log_unittest libgmock.a libgtest.a libgtest_main.a
-    libgmock_main.a pthread basic_t)
+    libgmock_main.a pthread Log_base)

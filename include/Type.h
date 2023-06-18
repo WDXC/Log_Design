@@ -20,22 +20,12 @@ const char* const LogSeverityNames[NUM_SEVERITIES] = {
   "INFO", "WARNING", "ERROR", "FATAL"
 };
 
-static const char* g_program_invocation_short_name = nullptr;
-
 enum GLogColor {
     COLOR_DEFAULT,
     COLOR_RED,
     COLOR_GREEN,
     COLOR_YELLOW
 };
-
-static bool BoolFromEnv(const char *varname, bool defval) {
-  const char* const valstr = getenv(varname);
-  if (!valstr) {
-    return defval;
-  }
-  return memchr("tTyY1\0", valstr[0], 6) != nullptr;
-}
 
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
 #define OS_WINDOWS
