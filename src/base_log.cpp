@@ -215,26 +215,7 @@ static void ColoredWriteToStderr(LogSeverity severity, const char *message,
   ColoredWriteToStderrOrStdout(stderr, severity, message, len);
 }
 
-static GLogColor SeverityToColor(LogSeverity severity) {
-  assert(severity >= 0 && severity < NUM_SEVERITIES);
-  GLogColor color = COLOR_DEFAULT;
-  switch (severity) {
-  case GLOG_INFO:
-    color = COLOR_DEFAULT;
-    break;
-  case GLOG_WARNING:
-    color = COLOR_YELLOW;
-    break;
-  case GLOG_ERROR:
-  case GLOG_FATAL:
-    color = COLOR_RED;
-    break;
-  default:
-    // should never get here
-    assert(false);
-  }
-  return color;
-}
+
 
 static void GetHostName(string *hostname) {
 #if defined(HAVE_SYS_UTSNAME_H)
@@ -691,7 +672,7 @@ void LogFileObject::Write(bool force_flush, time_t timestamp,
     if (base_filename_selected_) {
       if (!CreateLogfile(time_pid_string)) {
         perror("Could not create log file");
-        fprintf(stderr, "COULD NOT CREATE LOGFILE '%S'!\n",
+        fprintf(stderr, "COULD NOT CREATE LOGFILE '%s'!\n",
                 time_pid_string.c_str());
         return;
       }
