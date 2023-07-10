@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(Log)
 
+set(LOGBASE "logbase")
 message(STATUS "src this is source dir " ${CMAKE_SOURCE_DIR})
 
 
@@ -24,7 +25,7 @@ include_directories(include
 
 # 生成可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES})
-add_library(${PROJECT_NAME}_base SHARED ${SOURCES})
+add_library(${LOGBASE} SHARED ${SOURCES})
 add_executable(base_log_unittest test/base_log_test.cpp)
 target_link_libraries(base_log_unittest libgmock.a libgtest.a libgtest_main.a
-    libgmock_main.a pthread Log_base)
+    libgmock_main.a pthread ${LOGBASE})
