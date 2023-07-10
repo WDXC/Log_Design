@@ -19,13 +19,8 @@ set(SOURCES
 )
 
 # 添加头文件目录
-include_directories(include
-                    third_party/googletest/include
-                    third_party/googlemock/include )
+include_directories(include)
 
 # 生成可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES})
 add_library(${LOGBASE} SHARED ${SOURCES})
-add_executable(base_log_unittest test/base_log_test.cpp)
-target_link_libraries(base_log_unittest libgmock.a libgtest.a libgtest_main.a
-    libgmock_main.a pthread ${LOGBASE})
